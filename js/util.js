@@ -41,6 +41,19 @@ export function fmtDate(v, withTime) {
   return day + " " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
+// Üst başlıkta görünen bugünün tarihi: "15 Eylül 2026 · Salı".
+// Tarayıcının dil ayarına bağlı kalmasın diye adlar burada sabit.
+const AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+               "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
+const GUNLER = ["Pazar", "Pazartesi", "Salı", "Çarşamba",
+                "Perşembe", "Cuma", "Cumartesi"];
+
+export function todayLabel(v) {
+  const d = toDate(v) || new Date();
+  return d.getDate() + " " + AYLAR[d.getMonth()] + " " + d.getFullYear() +
+         " · " + GUNLER[d.getDay()];
+}
+
 export function minutesBetween(a, b) {
   const d0 = toDate(a), d1 = toDate(b);
   if (!d0 || !d1) return 0;
