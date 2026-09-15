@@ -1,6 +1,6 @@
 // Yönlendirme, gezinme ve giriş ekranı.
 
-import { $, $$, esc, el, toast } from "./util.js";
+import { $, $$, esc, el, toast, todayLabel } from "./util.js";
 import { APP_VERSION, PLANT_NAME } from "./config.js";
 import { session, watchSession, refreshSession, signIn, signInWithPassword, signOutNow,
          resetPassword, registerAndRequest, submitRequest, resendVerification,
@@ -286,6 +286,19 @@ function showRequestForm(signedIn) {
 
 let watching = false;
 
+// Tabletler gün boyu açık kalıyor; gece yarısını geçince başlıktaki tarih
+// kendiliğinden dönsün. Dakikada bir bakar, yalnızca değişince yazar.
+let clockTimer = null;
+function startClock() {
+  if (clockTimer) return;
+  clockTimer = setInterval(function () {
+    const sub = $("#topbar-sub");
+    if (!sub) return;
+    const t = todayLabel();
+    if (sub.textContent !== t) sub.textContent = t;
+  }, 60000);
+}
+
 async function onSession() {
   if (session.state === "ready") {
     $("#login").hidden = true;
@@ -293,7 +306,8 @@ async function onSession() {
     $("#user-name").textContent = myName();
     $("#user-roles").textContent = roleLabels(
       (session.member && session.member.roles) || []).join(" · ");
-    $("#topbar-sub").textContent = PLANT_NAME;
+    $("#topbar-sub").textContent = todayLabel();
+    startClock();
 
     if (!watching) {
       watching = true;
@@ -317,7 +331,7 @@ $("#logout-btn").onclick = async function () {
 // İstasyon tabletleri paylaşılır. Bir önceki kişi çıkış yapmayı unutursa
 // sonraki kayıtlar onun adına işlenir; bu yüzden IDLE_MINUTES hareketsizlikten
 // sonra oturum kendiliğinden kapanır. Süre app'in sol altında yazılmaz,
-// kişi ekrana dokunduğu sürece sayaç sıfırlanır.
+// kişi ekrana dokunduğu sürece sayacı sıfırlanır.
 const IDLE_MINUTES = 45;
 let lastActivity = Date.now();
 ["pointerdown", "keydown", "touchstart"].forEach(function (ev) {
