@@ -320,19 +320,82 @@ export async function readEvents(tractorId) {
 
 export async function grantAccess(email, name, roles, stepCode) {
   const mail = String(email || "").trim().toLowerCase();
+  const adi = String(name || "").trim();
   await setDocFull("allowed", mail, {
-    name: String(name || "").trim(),
+    name: adi,
     roles: roles || [],
     stepCode: stepCode || "",
     active: true,
     at: new Date().toISOString()
   });
   await log("yetki_verildi", mail, (roles || []).join(","));
+  // Ad her kaydedilişinde eski kayıtlardaki kopyalarıyla eşitlenir; yoksa bir
+  // yazım hatası düzeltildikten sonra ekranlarda eski ad kalırdı. Değişecek
+  // bir şey yoksa hiçbir yazma yapmaz.
+  try { await renameEverywhere(mail, adi); } catch (e) { console.error(e); }
 }
 
 export async function revokeAccess(email) {
   await removeDoc("allowed", String(email || "").toLowerCase());
   await log("yetki_kaldirildi", String(email || "").toLowerCase(), "");
+}
+
+/* ---------------- eski kayıtlardaki ismi düzeltme ---------------- */
+// Bir kayıt oluşturulurken kişinin o anki adı kaydın İÇİNE de yazılır; böylece
+// kişi sistemden çıkarılsa bile "kim yaptı" görünür. Ad sonradan düzeltilince
+// eski kayıtlar eski adı göstermeye devam eder — bu işlem hepsini tarayıp
+// günceller. Değişiklik günlüğü bilerek dışarıda bırakıldı: o koleksiyon
+// salt-ekleme, yazılmış bir satır hiç kimse tarafından değiştirilemez.
+const NAME_FIELDS = {
+  tractors: [["createdBy", "createdByName"], ["currentOperator", "currentOperatorName"]],
+  defects:  [["detectedBy", "detectedByName"], ["reworkBy", "reworkByName"],
+             ["approvedBy", "approvedByName"], ["cancelledBy", "cancelledByName"]]
+};
+
+export async function renameEverywhere(email, newName) {
+  const mail = String(email || "").trim().toLowerCase();
+  const name = String(newName || "").trim();
+  if (!mail || !name) throw new Error("E-posta ve ad gerekli.");
+
+  const f = await fb();
+  const jobs = [];   // { path: [...], patch: {} }
+
+  for (const coll of ["tractors", "defects"]) {
+    const rows = docsOf(await f.getDocs(f.collection(f.db, coll)));
+    rows.forEach(function (row) {
+      const patch = {};
+      NAME_FIELDS[coll].forEach(function (pair) {
+        if (String(row[pair[0]] || "").toLowerCase() === mail && row[pair[1]] !== name) {
+          patch[pair[1]] = name;
+        }
+      });
+      if (Object.keys(patch).length) jobs.push({ path: [coll, row.id], patch: patch });
+    });
+  }
+
+  // Adım geçişleri traktörün altındaki ayrı koleksiyonda duruyor.
+  const tractorIds = docsOf(await f.getDocs(f.collection(f.db, "tractors")))
+    .map(function (t) { return t.id; });
+  for (const tid of tractorIds) {
+    const evs = docsOf(await f.getDocs(f.collection(f.db, "tractors", tid, "events")));
+    evs.forEach(function (ev) {
+      if (String(ev.operator || "").toLowerCase() === mail && ev.operatorName !== name) {
+        jobs.push({ path: ["tractors", tid, "events", ev.id], patch: { operatorName: name } });
+      }
+    });
+  }
+
+  // Firestore toplu yazmada 500 işlem sınırı var; 400'lük paketler hâlinde.
+  for (let i = 0; i < jobs.length; i += 400) {
+    const batch = f.writeBatch(f.db);
+    jobs.slice(i, i + 400).forEach(function (j) {
+      batch.update(f.doc.apply(null, [f.db].concat(j.path)), j.patch);
+    });
+    await batch.commit();
+  }
+
+  if (jobs.length) await log("isim_guncellendi", mail, name + " · " + jobs.length + " kayıt");
+  return jobs.length;
 }
 
 export async function decideRequest(email, approve, roles, stepCode, name) {

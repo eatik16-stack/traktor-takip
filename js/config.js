@@ -16,6 +16,6 @@ export const firebaseConfig = {
 
 // Sürüm damgası — her güncellemede değişir. Ekranın sol alt köşesinde görünür;
 // "güncelleme bu tablete ulaştı mı?" sorusunu tek bakışta cevaplar.
-export const APP_VERSION = "2026.09.15c";
+export const APP_VERSION = "2026.09.15d";
 
 export const PLANT_NAME = "TAFE Manisa";
