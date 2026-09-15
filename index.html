@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f2557">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Traktör Takip Sistemi</title>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚜</text></svg>">
+</head>
+<body>
+
+<!-- ======================= GİRİŞ ======================= -->
+<div id="login" class="login" hidden>
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="login-logo">🚜</span>
+      <div>
+        <h1>Traktör Takip Sistemi</h1>
+        <p id="login-plant">TAFE Manisa</p>
+      </div>
+    </div>
+    <div id="login-slot"></div>
+  </div>
+</div>
+
+<!-- ======================= UYGULAMA ======================= -->
+<div id="app" hidden>
+  <header class="topbar">
+    <span class="topbar-logo">🚜</span>
+    <div class="topbar-title">
+      <strong>Traktör Takip</strong>
+      <small id="topbar-sub">TAFE Manisa</small>
+    </div>
+    <div class="spacer"></div>
+    <div class="topbar-user">
+      <span id="user-name"></span>
+      <small id="user-roles"></small>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="logout-btn" style="color:#fff">Çıkış</button>
+  </header>
+
+  <div class="app-body">
+    <nav class="sidebar" id="sidebar"></nav>
+    <main class="content" id="view"></main>
+  </div>
+
+  <nav class="tabbar" id="tabbar"></nav>
+</div>
+
+<div id="toast-host" class="toast-host"></div>
+<div id="modal-host"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

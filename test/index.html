@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Traktör Takip — test</title>
+  <link rel="stylesheet" href="../assets/app.css">
+  <link rel="icon" href="data:,">
+  <script src="mock.js"></script>
+</head>
+<body>
+<div id="toast-host" class="toast-host"></div>
+<div id="modal-host"></div>
+<pre id="out" style="padding:16px;font:13px/1.55 ui-monospace,Menlo,Consolas,monospace">Koşuyor…</pre>
+
+<script type="module">
+import * as store from "../js/store.js";
+import * as flow from "../js/flow.js";
+import { data } from "../js/store.js";
+import { seedAll, rapor } from "../js/views-admin.js";
+import { watchSession, session } from "../js/auth.js";
+import { runScenario } from "./scenario.mjs";
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(fn, ms = 2500) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (fn()) return true; await sleep(25); }
+  return false;
+}
+
+// Rapor hesabını ekran çizmeden kullanabilmek için views-admin'deki
+// buildReport'u dışarıdan çağırmak yerine aynı hesabı burada tetikleriz.
+import { REPORT_FOR_TEST } from "../js/views-admin.js";
+
+window.addEventListener("error", e => {
+  document.getElementById("out").textContent += "\nJS HATASI: " + e.message;
+});
+
+(async function () {
+  // Yönetici olarak oturum aç
+  window.__MOCK__.seedAllowed("admin@test.local", "Yönetici",
+    ["admin", "kontrol", "rework", "onay", "operator", "hata_duzenle"], "RDC");
+  // Hem rework hem onay yetkisi olan kişi: dört göz kuralının asıl sınandığı durum
+  window.__MOCK__.seedAllowed("rework@test.local", "Rework Kişi", ["rework", "onay"], "RW-1");
+  window.__MOCK__.seedAllowed("onay@test.local", "Onay Kişi", ["onay", "kontrol"], "PDI");
+  window.__MOCK__.signInAs("admin@test.local", "Yönetici");
+
+  await new Promise(res => watchSession(() => { if (session.state === "ready") res(); }));
+  await store.startWatching();
+  await sleep(120);
+
+  let results;
+  try {
+    results = await runScenario({
+      flow, data, store, mock: window.__MOCK__, sleep, waitFor,
+      seed: seedAll,
+      buildReport: REPORT_FOR_TEST
+    });
+  } catch (e) {
+    results = [{ name: "SENARYO ÇÖKTÜ", ok: false, extra: (e && e.stack) || String(e) }];
+  }
+
+  window.__RESULTS__ = results;
+  const bad = results.filter(r => !r.ok);
+  document.getElementById("out").textContent =
+    results.map(r => (r.ok ? "  OK   " : "  FAIL ") + r.name + (r.ok ? "" : "  -> " + r.extra)).join("\n") +
+    "\n\n  BAŞARILI: " + (results.length - bad.length) + "   BAŞARISIZ: " + bad.length;
+  window.__DONE__ = true;
+})();
+</script>
+</body>
+</html>

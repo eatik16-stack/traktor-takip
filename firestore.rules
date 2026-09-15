@@ -1,0 +1,157 @@
+rules_version = '2';
+
+// Traktör Takip Sistemi — yetki kuralları.
+//
+// Kimin gireceği kurallarda değil, "allowed" koleksiyonunda tutulur; kurallar
+// yalnızca yeni bir koleksiyon ya da rol eklendiğinde yeniden yayınlanır.
+// Rol adları js/roles.js dosyasındakilerle BİREBİR aynı olmalı:
+//   admin, yonetim, kontrol, rework, onay, operator, hata_duzenle, tam_onay
+//
+// Ekran gizlemek güvenlik değildir: aşağıdaki sınırlar sunucuda zorlanır.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- yardımcılar -------------------------------------------------
+    // E-posta/şifreyle açılan hesaplar doğrulanana kadar giremez;
+    // Google ile gelen adresler zaten doğrulanmış sayılır.
+    function signedIn() {
+      return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true;
+    }
+    function email()   { return request.auth.token.email.lower(); }
+    function userRef() { return /databases/$(database)/documents/allowed/$(email()); }
+
+    function isAllowed() { return signedIn() && exists(userRef()); }
+    function me()        { return get(userRef()).data; }
+    function myRoles()   { return me().get('roles', []); }
+
+    // Sistem yöneticiliği her yetkiyi açar.
+    function hasRole(roles) {
+      return isAllowed() && (myRoles().hasAny(['admin']) || myRoles().hasAny(roles));
+    }
+    // Rol AÇIKÇA verilmiş mi? Sistem yöneticiliği burada yeterli DEĞİLDİR.
+    // Bir kalite kuralını kaldıran yetkiler farkında olmadan herkeste
+    // açık kalmamalı (bkz. tam_onay).
+    function hasExactRole(role) { return isAllowed() && myRoles().hasAny([role]); }
+
+    function isAdmin()   { return hasRole(['admin']); }
+    function canEditDefects() { return hasRole(['hata_duzenle']); }
+
+    // --- kimler girebilir --------------------------------------------
+    // Herkes listeyi okuyabilir (ekranlarda isim göstermek için),
+    // yalnızca yönetici değiştirebilir.
+    match /allowed/{userEmail} {
+      allow read:                   if isAllowed();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // --- erişim talepleri ---------------------------------------------
+    // Kişi kendi talebini yalnızca bir kez bırakır: create sadece belge
+    // yokken çalışır, update yalnızca yöneticide. Reddedilen bir talep
+    // bu yüzden kendiliğinden tekrar açılamaz.
+    match /requests/{userEmail} {
+      allow get:    if isAdmin() || (signedIn() && email() == userEmail);
+      allow list:   if isAdmin();
+      allow create: if signedIn()
+                    && email() == userEmail
+                    && !exists(userRef())
+                    && request.resource.data.email == userEmail
+                    && request.resource.data.status == 'bekliyor';
+      allow update, delete: if isAdmin();
+    }
+
+    // --- tanımlar: adımlar, listeler, katalog, kişiler ------------------
+    // Katalog hata kaydı açılırken büyüdüğü için kontrol rolü de yazabilir;
+    // adımlar ve listeler yalnızca yöneticide.
+    match /config/catalog {
+      allow read:  if isAllowed();
+      allow write: if hasRole(['kontrol', 'onay', 'hata_duzenle']);
+    }
+    match /config/{doc} {
+      allow read:  if isAllowed();
+      allow write: if isAdmin();
+    }
+
+    // --- traktörler -----------------------------------------------------
+    // Şasi numarasını düzeltmek ayrı bir yetkidir: yanlış yazılmış numarayı
+    // düzeltmek o traktörün BÜTÜN geçmişini başka bir numaraya taşır.
+    function chassisUnchanged() {
+      return request.resource.data.chassisNo == resource.data.chassisNo;
+    }
+    match /tractors/{doc} {
+      allow read:   if isAllowed();
+      allow create: if hasRole(['operator', 'kontrol', 'onay']);
+      allow update: if hasRole(['operator', 'kontrol', 'onay', 'rework'])
+                    && (chassisUnchanged() || canEditDefects());
+      // Traktör kaydı silinmez; sevk edilir ya da beklemeye alınır.
+      allow delete: if false;
+
+      match /events/{ev} {
+        allow read:   if isAllowed();
+        allow create, update: if hasRole(['operator', 'kontrol', 'onay', 'rework']);
+        allow delete: if false;
+      }
+    }
+
+    // --- hata kayıtları --------------------------------------------------
+    function d()    { return resource.data; }
+    function nd()   { return request.resource.data; }
+    function keysChanged() { return nd().diff(d()).affectedKeys(); }
+
+    // Dört göz kuralı: rework'ü yapan kişi onu onaylayamaz. Yalnızca
+    // "tam_onay" yetkisi AÇIKÇA verilmiş kişilerde kalkar. Bu kural ekranda
+    // da var, ama asıl yeri burası — konsoldan da atlanamasın.
+    function approvalOk() {
+      return nd().get('status', '') != 'onaylandi'
+          || d().get('status', '') == 'onaylandi'
+          || d().get('reworkBy', '') != email()
+          || hasExactRole('tam_onay');
+    }
+    // Onay kaydı başkası adına yazılamaz.
+    function approverIsMe() {
+      return nd().get('status', '') != 'onaylandi'
+          || d().get('status', '') == 'onaylandi'
+          || nd().get('approvedBy', '') == email();
+    }
+    // İptal etmek ve iptali geri almak yalnızca hata_duzenle yetkisinde.
+    function cancelOk() {
+      return (nd().get('status', '') == 'iptal') == (d().get('status', '') == 'iptal')
+          || canEditDefects();
+    }
+    // Sadece tanım alanlarını değiştirmek de aynı yetkiyi ister.
+    function editOk() {
+      return !keysChanged().hasAny(['category', 'description', 'detectedStepId',
+                                    'detectedStepCode', 'source', 'originLocation',
+                                    'partCode', 'partName', 'tractorId', 'chassisNo'])
+          || canEditDefects();
+    }
+
+    match /defects/{doc} {
+      allow read:   if isAllowed();
+      allow create: if hasRole(['kontrol', 'onay'])
+                    && nd().get('detectedBy', '') == email()
+                    && nd().get('status', '') == 'acik';
+      allow update: if hasRole(['kontrol', 'onay', 'rework'])
+                    && approvalOk() && approverIsMe() && cancelOk() && editOk();
+      // Hata kaydı SİLİNMEZ, iptal edilir — geçmiş izsiz kaybolmasın.
+      allow delete: if false;
+    }
+
+    // --- değişiklik günlüğü ---------------------------------------------
+    // Salt ekleme: yazılan bir kayıt hiç kimse tarafından değiştirilemez veya
+    // silinemez. "Veri kaybolmasın" güvencesi burada. Kayıt başkası adına ya
+    // da başka bir tarihle yazılamaz: "by" giriş yapan kişinin e-postası,
+    // "at" sunucu saati olmak zorunda.
+    match /log/{doc} {
+      allow read:   if isAllowed();
+      allow create: if isAllowed()
+                    && nd().keys().hasOnly(['at', 'atISO', 'by', 'byName', 'action', 'target', 'detail'])
+                    && nd().by == email()
+                    && nd().at == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}
