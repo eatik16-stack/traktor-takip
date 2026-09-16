@@ -38,8 +38,57 @@ export function completedStepCodes(t) {
 }
 
 export function pendingSteps(t) {
+  const m = (t && t.steps) || {};
   const done = completedStepCodes(t);
-  return activeSteps().filter(function (s) { return done.indexOf(s.code) === -1; });
+  return activeSteps().filter(function (s) {
+    if (m[s.code] && m[s.code].result === SKIPPED) return false;   // işi yoktu
+    return done.indexOf(s.code) === -1;
+  });
+}
+
+/* ---------------- adım türleri ve yönlendirme ---------------- */
+//
+// Adımlar iki işe ayrılır: KALİTE adımları (kontrol, onay) hatayı tespit eder,
+// İŞ adımları (rework, islem) hatayı giderir ya da üretim işini yapar.
+// Yönlendirme bu ayrıma dayanır.
+
+export function isReworkStep(s)  { return !!s && s.kind === "rework"; }
+export function isQualityStep(s) { return !!s && (s.kind === "kontrol" || s.kind === "onay"); }
+
+// Bir traktörde rework istasyonunu ilgilendiren iş var mı? "rework_tamam"
+// olanlar onay bekler, rework personelinin işi bitmiştir.
+export function pendingReworkCount(tractorId) {
+  return data.defects.filter(function (d) {
+    return d.tractorId === tractorId && (d.status === "acik" || d.status === "reworkta");
+  }).length;
+}
+
+// Hata çıkaran kalite adımından sonra traktörün gideceği rework istasyonu.
+// Önce SONRAKİ rework adımı denenir (normal akış: RDC -> RW-1). Yoksa en
+// yakın ÖNCEKİ rework adımına geri gönderilir (FINAL -> RW-2) ve traktörün
+// nereden geldiği kaydedilir ki iş bitince oraya dönsün.
+function reworkTargetFor(steps, cur) {
+  const ileri = steps.filter(function (s) { return s.seq > cur.seq && isReworkStep(s); });
+  if (ileri.length) return { step: ileri[0], back: false };
+  const geri = steps.filter(function (s) { return s.seq < cur.seq && isReworkStep(s); });
+  if (geri.length) return { step: geri[geri.length - 1], back: true };
+  return null;
+}
+
+// İşi olmayan rework istasyonu atlanır — RW-2 personeli boş traktör görmesin.
+// Üretim adımları (OIL, PAINT) atlanmaz: onlar her traktörde yapılır.
+// Atlanan adımlar geçmişe "atlandı" diye işlenir ki çizelgede boşluk kalmasın.
+export const SKIPPED = "atlandi";
+
+function skipIdleRework(steps, from, tractorId) {
+  let s = from;
+  const atlanan = [];
+  let guard = steps.length + 1;
+  while (s && isReworkStep(s) && pendingReworkCount(tractorId) === 0 && guard-- > 0) {
+    atlanan.push(s);
+    s = steps.find(function (x) { return x.seq > s.seq; }) || null;
+  }
+  return { step: s, skipped: atlanan };
 }
 
 export function minutesHere(t) {
@@ -148,13 +197,28 @@ export async function finishStep(tractorId, result, note) {
     // geçilebildiği için traktör asla ilerleyemez.
     const done = completedStepCodes(t);
     const missing = steps.filter(function (s) {
-      return s.seq < cur.seq && done.indexOf(s.code) === -1;
+      // Rework istasyonları zorunlu değildir: hata yoksa atlanırlar. Açık
+      // hata kalmadığı zaten yukarıda kontrol edildi.
+      return s.seq < cur.seq && !isReworkStep(s) && done.indexOf(s.code) === -1;
     });
     if (missing.length) {
       const names = missing.slice(0, 6).map(function (s) { return s.seq + ". " + s.name; }).join(", ");
       const more = missing.length > 6 ? " (+" + (missing.length - 6) + " adım daha)" : "";
       throw uyari("Tamamlanmamış " + missing.length + " adım var: " + names + more +
                   ". Traktör sevke hazır sayılamaz.");
+    }
+  }
+
+  // Kalite adımında onay bekleyen hata varsa adım kapanmaz: rework'ü biten
+  // hatayı onaylamak ya da reddetmek bu istasyonun işidir. Aksi halde traktör
+  // rework ile kalite arasında gidip gelirdi.
+  if (isQualityStep(cur)) {
+    const onayBekleyen = data.defects.filter(function (d) {
+      return d.tractorId === tractorId && d.status === "rework_tamam";
+    }).length;
+    if (onayBekleyen) {
+      throw uyari("Onayınızı bekleyen " + onayBekleyen + " hata var. " +
+                  "Her birini onaylayın ya da reddedin, sonra adımı tamamlayın.");
     }
   }
 
@@ -181,30 +245,74 @@ export async function finishStep(tractorId, result, note) {
     operatorName: t.currentOperatorName || myName()
   });
 
-  const next = steps.find(function (s) { return s.seq > cur.seq; }) || null;
+  // --- traktör nereye gidecek? ---
+  let next = null;
+  let returnStepId = t.returnStepId || null;
+  let returnReady = !!t.returnReady;
+  let geriDonus = false;
+
+  if (!isQualityStep(cur) && (returnStepId || returnReady)) {
+    // İş adımı bitti ve bu traktör bir yerden geri gönderilmişti: oraya döner.
+    // OIL/PAINT gibi araya giren üretim adımları tekrar yapılmaz.
+    if (returnStepId) next = stepById(returnStepId) || null;
+    geriDonus = true;
+    returnStepId = null;
+  }
+
+  if (!next && !geriDonus && isQualityStep(cur) && openDefects(tractorId).length) {
+    // Kalite adımı açık hatayla kapandı: hatanın giderileceği istasyona gider.
+    const hedef = reworkTargetFor(steps, cur);
+    if (hedef) {
+      next = hedef.step;
+      if (hedef.back) returnStepId = cur.id;   // ileride buraya dönecek
+    }
+  }
+
+  if (!next && !geriDonus) next = steps.find(function (s) { return s.seq > cur.seq; }) || null;
+  // İşi olmayan rework istasyonunu atla.
+  if (next && !geriDonus) {
+    const atla = skipIdleRework(steps, next, tractorId);
+    next = atla.step;
+    atla.skipped.forEach(function (x) {
+      stepMap[x.code] = {
+        result: SKIPPED, wait: 0, work: 0, total: 0,
+        operator: null, operatorName: null, finishedAt: now
+      };
+    });
+  }
+
+  const patch = {
+    steps: stepMap,
+    returnStepId: returnStepId,
+    returnReady: geriDonus ? false : returnReady
+  };
 
   if (!next) {
-    await saveDoc("tractors", tractorId, {
-      steps: stepMap, status: "sevke_hazir", readyAt: now,
+    await saveDoc("tractors", tractorId, Object.assign(patch, {
+      status: "sevke_hazir", readyAt: now,
       currentStepId: cur.id, currentEnteredAt: null, currentStartedAt: null,
       currentOperator: null, currentOperatorName: null, currentEventId: null
-    });
+    }));
     await log("adim_tamamlandi", t.chassisNo, cur.code + " -> sevke hazır");
     return { finished: cur.code, next: null, status: "sevke_hazir" };
   }
 
   const evId = newId("ev");
-  await saveDoc("tractors", tractorId, {
-    steps: stepMap, status: "devam",
+  await saveDoc("tractors", tractorId, Object.assign(patch, {
+    status: "devam",
     currentStepId: next.id, currentEnteredAt: now, currentStartedAt: null,
     currentOperator: null, currentOperatorName: null, currentEventId: evId
-  });
+  }));
   await addEventDoc(tractorId, evId, next, now);
-  await log("adim_tamamlandi", t.chassisNo, cur.code + " -> " + next.code);
-  return { finished: cur.code, next: next.code, status: "devam" };
+  await log("adim_tamamlandi", t.chassisNo, cur.code + " -> " + next.code +
+            (geriDonus ? " (geri dönüş)" : ""));
+  return { finished: cur.code, next: next.code, status: "devam", returned: geriDonus };
 }
 
-export async function moveToStep(tractorId, stepId, note) {
+// opts.returnHere: traktör iş bitince BURAYA geri dönsün. Sevk için bekleyen
+// bir traktörde sonradan boya/pas hatası çıkarsa boya istasyonuna iş emri
+// açılır, iş bitince traktör yine sevke hazır duruma döner.
+export async function moveToStep(tractorId, stepId, note, opts) {
   const t = tractorById(tractorId);
   const target = stepById(stepId);
   if (!t || !target) throw uyari("Traktör veya adım bulunamadı.");
@@ -219,13 +327,19 @@ export async function moveToStep(tractorId, stepId, note) {
     });
   }
   const evId = newId("ev");
-  await saveDoc("tractors", tractorId, {
+  const patch = {
     status: "devam", currentStepId: target.id, currentEnteredAt: now,
     currentStartedAt: null, currentOperator: null, currentOperatorName: null,
     currentEventId: evId
-  });
+  };
+  if (opts && opts.returnHere) {
+    if (t.status === "sevke_hazir") { patch.returnReady = true; patch.returnStepId = null; }
+    else { patch.returnReady = false; patch.returnStepId = t.currentStepId || null; }
+  }
+  await saveDoc("tractors", tractorId, patch);
   await addEventDoc(tractorId, evId, target, now);
-  await log("yonlendirildi", t.chassisNo, "-> " + target.code + (note ? ": " + note : ""));
+  await log("yonlendirildi", t.chassisNo, "-> " + target.code + (note ? ": " + note : "") +
+            (opts && opts.returnHere ? " | iş bitince geri dönecek" : ""));
 }
 
 export async function holdTractor(tractorId, reason) {
@@ -295,7 +409,13 @@ export async function addDefect(tractorId, fields) {
   if (description.length < 2) throw uyari("Hata tanımı yazın.");
 
   const stepId = fields.detectedStepId || t.currentStepId;
-  const step = stepById(stepId);
+  let step = stepById(stepId);
+  if (!step) {
+    // Traktörün bulunduğu adım tanımlardan silinmiş olabilir (ya da traktör
+    // sevke hazır bekliyordur). Kayıt kaybolmasın diye son aktif adıma yazılır.
+    const aktif = activeSteps();
+    step = aktif[aktif.length - 1] || null;
+  }
   if (!step) throw uyari("Hatanın tespit edildiği istasyon belirlenemedi.");
 
   const id = newId("d");
@@ -324,6 +444,13 @@ export async function addDefect(tractorId, fields) {
     cancelledBy: null, cancelledAt: null, cancelReason: null
   });
   await log("hata_kaydedildi", t.chassisNo, category + " / " + description);
+
+  // Hata belli bir istasyonda giderilecekse traktör oraya gönderilir ve iş
+  // bitince bulunduğu yere döner. Boş bırakılırsa normal akış işler.
+  if (fields.assignStepId && fields.assignStepId !== t.currentStepId) {
+    await moveToStep(tractorId, fields.assignStepId,
+                     "hata giderilecek: " + description, { returnHere: true });
+  }
   return id;
 }
 
@@ -361,6 +488,37 @@ export async function completeDefect(defectId) {
   await saveDoc("defects", defectId, { status: "rework_tamam", reworkFinishedAt: now });
   await log("rework_tamamlandi", d.chassisNo,
             Math.round(workMinutes(d.reworkStartedAt, now)) + " dk");
+
+  // Rework istasyonunun işi bitti mi? Bu kayıt dışında açık ya da üzerine
+  // alınmış hata kalmadıysa adım kendiliğinden kapanır ve traktör ilerler;
+  // operatörün ayrıca "Adımı Tamamla" demesi gerekmez.
+  const kalan = data.defects.filter(function (x) {
+    return x.tractorId === d.tractorId && x.id !== defectId &&
+           (x.status === "acik" || x.status === "reworkta");
+  }).length;
+  const t = tractorById(d.tractorId);
+  const cur = t ? stepById(t.currentStepId) : null;
+  if (!kalan && t && isReworkStep(cur) && (t.status === "devam" || t.status === "beklemede")) {
+    try {
+      if (!t.currentStartedAt) {
+        // İşlem süresi ilk "Üzerime Al"dan sayılsın; bekleme süresi traktörün
+        // adıma girişinden o ana kadar olan kısım olur.
+        const baslangiclar = data.defects
+          .filter(function (x) { return x.tractorId === t.id && x.reworkStartedAt; })
+          .map(function (x) { return x.reworkStartedAt; }).sort();
+        await saveDoc("tractors", t.id, {
+          currentStartedAt: baslangiclar[0] || now,
+          currentOperator: myEmail(), currentOperatorName: myName()
+        });
+      }
+      const r = await finishStep(d.tractorId, "ok", "hatalar kapandı — adım kendiliğinden tamamlandı");
+      return { autoFinished: true, next: r.next, status: r.status };
+    } catch (e) {
+      // Adım kapanamazsa (ör. eksik önceki adım) hata kaydı yine de tamamlandı.
+      console.warn("adım kendiliğinden kapatılamadı", e);
+    }
+  }
+  return { autoFinished: false };
 }
 
 export async function approveDefect(defectId) {
