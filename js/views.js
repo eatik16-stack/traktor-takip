@@ -113,8 +113,15 @@ export function sema(view) {
 }
 
 /* ================= 2. İstasyonum ================= */
+//
+// Üretim personelinin (rework, oil, boya…) bakması gereken TEK ekran burası.
+// İstasyona düşen traktör, o traktörün hataları ve adımı başlat/tamamla
+// düğmeleri aynı ekranda; kimse Traktörler listesine gidip kart açmak zorunda
+// kalmasın. İstasyonda geçen süre de bu ekrandan girilen başlat/tamamla
+// kayıtlarıyla ölçülüyor.
 
 let stQ = "";
+let stSel = null;
 
 export function istasyon(view, _p, rerender) {
   const code = myStepCode();
@@ -129,12 +136,43 @@ export function istasyon(view, _p, rerender) {
   const isFirst = steps.length && steps[0].id === step.id;
   const q = stQ.trim();
 
-  const queue = data.tractors.filter(function (t) {
+  const here = function (t) {
     return t.currentStepId === step.id && (t.status === "devam" || t.status === "beklemede");
-  }).sort(function (a, b) {
+  };
+  const queue = data.tractors.filter(here).sort(function (a, b) {
     return new Date(a.currentEnteredAt || 0) - new Date(b.currentEnteredAt || 0);
   });
   const hits = q ? findTractors(q, 8) : [];
+
+  // Açılır açılmaz iş görünsün: seçim yoksa kuyruğun ilki açılır.
+  if (stSel && !tractorById(stSel)) stSel = null;
+  let sel = stSel ? tractorById(stSel) : null;
+  if (!sel && queue.length) { sel = queue[0]; }
+
+  const openOf = function (t) {
+    return data.defects.filter(function (d) {
+      return d.tractorId === t.id && (d.status === "acik" || d.status === "reworkta");
+    });
+  };
+  const mineOf = function (t) {
+    return data.defects.filter(function (d) {
+      return d.tractorId === t.id && d.status === "reworkta" && d.reworkBy === myEmail();
+    });
+  };
+
+  // Panelin üstündeki adım düğmeleri. Traktör bu istasyonda değilse
+  // (aramayla bulunmuşsa) adım düğmesi gösterilmez, yanlış adım kapanmasın.
+  let stepButtons = "";
+  if (sel && here(sel)) {
+    const acikSayi = openOf(sel).length;
+    stepButtons =
+      (!sel.currentStartedAt
+        ? '<button class="btn btn-primary" id="stp-start">▶ Adımı Başlat</button>'
+        : '<button class="btn btn-success" id="stp-finish">✓ Adımı Tamamla</button>') +
+      (step.allowsDefect ? '<button class="btn btn-danger" id="stp-defect">⚠ Hata Ekle</button>' : "") +
+      (acikSayi ? '<span class="chip chip-red" style="align-self:center">' + acikSayi +
+                  " hata kapanmadı</span>" : "");
+  }
 
   view.innerHTML =
     '<div class="page-head"><div><h2>' + esc(step.name) + "</h2>" +
@@ -147,36 +185,108 @@ export function istasyon(view, _p, rerender) {
         'placeholder="Traktör bul — şasinin son 6 hanesi" value="' + esc(stQ) + '">' +
       (q ? '<button class="btn btn-ghost" id="st-clear" aria-label="Temizle">✕</button>' : "") +
     "</div>" +
+
+    (sel ? reworkPanel(sel, openOf(sel), mineOf(sel), stepButtons) : "") +
+
     (q ? '<div class="card"><div class="card-head"><h3>' + hits.length + " sonuç</h3></div>" +
-         (hits.length ? '<div class="tlist">' + hits.map(function (t) {
-           const here = t.currentStepId === step.id && (t.status === "devam" || t.status === "beklemede");
-           return tractorCard(t, here
-             ? (!t.currentStartedAt
-                 ? '<button class="btn btn-primary btn-sm" data-act="start">▶ Başla</button>'
-                 : '<button class="btn btn-success btn-sm" data-act="finish">✓ Tamamla</button>') +
-               (step.allowsDefect ? '<button class="btn btn-danger btn-sm" data-act="defect">⚠ Hata</button>' : "")
-             : '<button class="btn btn-sm" data-act="open">Detay</button>');
+         (hits.length ? '<div class="rw-list">' + hits.map(function (t) {
+           return stationRow(t, sel, step);
          }).join("") + "</div>"
-         : emptyBox("Bu numarayla traktör bulunamadı." + (isFirst ? " Yeni traktörse \"+ Traktör Ekle\" ile kaydedin." : ""), "🔍")) +
+         : emptyBox("Bu numarayla traktör bulunamadı." +
+                    (isFirst ? " Yeni traktörse \"+ Traktör Ekle\" ile kaydedin." : ""), "🔍")) +
        "</div>" : "") +
-    (queue.length ? '<div class="tlist">' + queue.map(function (t) {
-      return tractorCard(t,
-        (!t.currentStartedAt
-          ? '<button class="btn btn-primary btn-sm" data-act="start">▶ Başla</button>'
-          : '<button class="btn btn-success btn-sm" data-act="finish">✓ Tamamla</button>') +
-        (step.allowsDefect ? '<button class="btn btn-danger btn-sm" data-act="defect">⚠ Hata</button>' : "") +
-        '<button class="btn btn-sm" data-act="open">Detay</button>');
-    }).join("") + "</div>" : (q ? "" : emptyBox("Bu istasyonda bekleyen traktör yok.", "✅")));
+
+    '<div class="card"><div class="card-head"><h3>İstasyon kuyruğu</h3></div>' +
+      (queue.length ? '<div class="rw-list">' + queue.map(function (t) {
+        return stationRow(t, sel, step);
+      }).join("") + "</div>"
+      : emptyBox("Bu istasyonda bekleyen traktör yok.", "✅")) + "</div>";
 
   const qi = $("#st-q", view);
   let tmr = null;
-  qi.oninput = function () { clearTimeout(tmr); tmr = setTimeout(function () { stQ = qi.value; rerender(); }, 200); };
+  qi.oninput = function () {
+    clearTimeout(tmr);
+    tmr = setTimeout(function () {
+      stQ = qi.value;
+      // Tek sonuç varsa hemen aç — operatör ikinci bir dokunuş yapmasın.
+      const h = findTractors(qi.value.trim(), 2);
+      if (qi.value.trim().length >= 4 && h.length === 1) stSel = h[0].id;
+      rerender();
+    }, 200);
+  };
   qi.onkeydown = function (e) { if (e.key === "Enter") qi.blur(); };
   const clr = $("#st-clear", view);
   if (clr) clr.onclick = function () { stQ = ""; rerender(); };
   const nb = $("#st-new", view);
   if (nb) nb.onclick = function () { newTractorDialog(rerender, q); };
-  bindTractorCards(view, rerender);
+
+  $$("[data-sel]", view).forEach(function (b) {
+    b.onclick = function () { stSel = b.dataset.sel; rerender(); };
+  });
+
+  const selId = sel ? sel.id : null;
+  const s1 = $("#stp-start", view);
+  if (s1) s1.onclick = async function () {
+    s1.disabled = true;
+    try { await flow.startWork(selId); toast("Adım başlatıldı.", "ok"); rerender(); }
+    catch (e) { err(e); s1.disabled = false; }
+  };
+  const s2 = $("#stp-finish", view);
+  if (s2) s2.onclick = async function () {
+    const acik = openOf(sel).length;
+    // Rework istasyonunda açık hata varken adımı kapatmak neredeyse her zaman
+    // yanlışlıktır; engellemiyoruz ama sormadan geçmiyoruz.
+    if (acik && !(await confirmDialog("Açık hata var",
+      "Bu traktörde kapanmamış " + acik + " hata var. Adımı yine de tamamlansın mı?",
+      "Yine de tamamla", "btn-warn"))) return;
+    s2.disabled = true;
+    try {
+      const r = await flow.finishStep(selId, "ok");
+      toast(r.next ? "Tamamlandı → sıradaki adım: " + r.next
+                   : "Tüm adımlar bitti — traktör sevke hazır!", "ok");
+      stSel = null;
+      rerender();
+    } catch (e) { err(e); s2.disabled = false; }
+  };
+  const s3 = $("#stp-defect", view);
+  if (s3) s3.onclick = function () { openDefectDialog(selId, rerender); };
+
+  bindDefectCards(view, rerender);
+  const all = $("#rw-take-all", view);
+  if (all) all.onclick = async function () {
+    all.disabled = true;
+    const targets = data.defects.filter(function (d) {
+      return d.tractorId === selId && d.status === "acik";
+    });
+    let n = 0;
+    try {
+      for (const d of targets) { await flow.takeDefect(d.id); n++; }
+      toast(n + " hata üzerinize alındı.", "ok");
+    } catch (e) { err(e); }
+    rerender();
+  };
+}
+
+// İstasyon listelerindeki tek satır — seçiliyi vurgular, açık hata sayısını
+// ve bu adımda geçen süreyi gösterir.
+function stationRow(t, sel, step) {
+  const open = data.defects.filter(function (d) {
+    return d.tractorId === t.id && (d.status === "acik" || d.status === "reworkta");
+  }).length;
+  const st = stepById(t.currentStepId);
+  const atHere = st && step && st.id === step.id;
+  return '<button class="rw-row' + (sel && sel.id === t.id ? " on" : "") +
+    '" data-sel="' + esc(t.id) + '">' +
+    '<span class="rw-ch"><strong>' + esc(shortChassis(t.chassisNo)) + "</strong>" +
+      (shortChassis(t.chassisNo) !== t.chassisNo ? "<small>" + esc(t.chassisNo) + "</small>" : "") + "</span>" +
+    '<span class="rw-meta">' + esc(t.saleCode || "") + (st ? " · " + esc(st.code) : "") +
+      (atHere ? " · " + fmtMin(flow.minutesHere(t)) : "") +
+      (t.status === "sevk_edildi" ? " · sevk edildi" : "") + "</span>" +
+    '<span class="rw-cnt">' +
+      (open ? '<span class="chip chip-red">' + open + " açık</span>"
+            : '<span class="chip chip-green">hata yok</span>') +
+      (atHere && t.currentStartedAt ? '<span class="chip chip-blue">işlemde</span>' : "") +
+    "</span></button>";
 }
 
 /* ================= 3. Rework ================= */
@@ -282,7 +392,7 @@ export function rework(view, _p, rerender) {
   if (!q && !sel && window.matchMedia("(min-width:900px)").matches) qi.focus();
 }
 
-function reworkPanel(t, open, mine) {
+function reworkPanel(t, open, mine, extraButtons) {
   const step = stepById(t.currentStepId);
   const all = data.defects.filter(function (d) { return d.tractorId === t.id && d.status !== "iptal"; })
     .sort(function (a, b) {
@@ -307,6 +417,7 @@ function reworkPanel(t, open, mine) {
       '<span class="chip chip-green">' + bitti + " tamamlandı</span>" +
     "</div>" +
     '<div class="btn-row" style="margin:10px 0 12px">' +
+      (extraButtons || "") +
       (acik && can(["rework", "kontrol"]) ? '<button class="btn btn-primary" id="rw-take-all">Tümünü üzerime al (' + acik + ")</button>" : "") +
       '<button class="btn" data-go-tractor="' + esc(t.id) + '" onclick="location.hash=\'#/traktor/' + esc(t.id) + '\'">Traktör kartı</button>' +
     "</div>" +
@@ -853,7 +964,13 @@ export async function traktor(view, params, rerender) {
     .sort(function (a, b) { return new Date(b.detectedAt) - new Date(a.detectedAt); });
   const open = defects.filter(function (d) { return flow.OPEN_STATES.indexOf(d.status) !== -1; }).length;
   const cur = stepById(t.currentStepId);
-  const pending = flow.pendingSteps(t);
+  let pending = flow.pendingSteps(t);
+  // Traktör daha önce tamamlanmış bir adıma geri gönderildiyse o adım yeniden
+  // yapılacak; listede görünmezse "her şey bitti" izlenimi verir.
+  if (cur && (t.status === "devam" || t.status === "beklemede") &&
+      !pending.some(function (s) { return s.code === cur.code; })) {
+    pending = pending.concat([cur]).sort(function (a, b) { return a.seq - b.seq; });
+  }
   const canEdit = can(["hata_duzenle"]);
 
   view.innerHTML =
@@ -897,16 +1014,26 @@ export async function traktor(view, params, rerender) {
     '<div class="card"><div class="card-head"><h3>Adım Geçmişi</h3></div><div class="timeline">' +
       steps.map(function (s) {
         const rec = (t.steps || {})[s.code];
-        const done = rec && flow.COMPLETED_RESULTS.indexOf(rec.result) !== -1;
-        const isCur = cur && cur.code === s.code && !done;
-        return '<div class="tl-item ' + (done ? "done" : "") + " " + (isCur ? "current" : "") + '">' +
+        const wasDone = !!rec && flow.COMPLETED_RESULTS.indexOf(rec.result) !== -1;
+        // Traktör ŞU AN bu adımdaysa, daha önce tamamlanmış olsa bile yeniden
+        // yapılacak demektir. Yeşil göstermek "burada işim bitti" anlamına
+        // gelirdi; geri gönderilen adım turuncu, ilk kez gelinen adım mavi.
+        const isCur = !!cur && cur.code === s.code &&
+                      (t.status === "devam" || t.status === "beklemede");
+        const redo = isCur && wasDone;
+        const done = wasDone && !isCur;
+        return '<div class="tl-item ' + (done ? "done" : "") +
+          (isCur ? (redo ? " redo" : " current") : "") + '">' +
           '<div class="tl-title">' + s.seq + ". " + esc(s.name) +
-            ' <span style="color:var(--muted);font-weight:500">' + esc(s.code) + "</span></div>" +
+            ' <span style="color:var(--muted);font-weight:500">' + esc(s.code) + "</span>" +
+            (redo ? ' <span class="chip chip-amber">tekrar yapılacak</span>' : "") + "</div>" +
           '<div class="tl-meta">' +
             (done ? fmtDate(rec.finishedAt) + " · " + esc(rec.operatorName || "—") +
                     " · bekleme " + fmtMin(rec.wait) + ", işlem " + fmtMin(rec.work)
-                  : isCur ? '<span style="color:var(--blue);font-weight:600">Şu an burada — ' +
-                            fmtMin(flow.minutesHere(t)) + "</span>"
+                  : isCur ? '<span style="color:' + (redo ? "var(--amber)" : "var(--blue)") +
+                            ';font-weight:600">Şu an burada — ' + fmtMin(flow.minutesHere(t)) + "</span>" +
+                            (redo ? "<br>önceki tamamlanma: " + fmtDate(rec.finishedAt) +
+                                    " · " + esc(rec.operatorName || "—") : "")
                           : "Bekliyor") +
           "</div></div>";
       }).join("") + "</div></div>" +
