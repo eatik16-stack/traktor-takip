@@ -48,6 +48,7 @@ function overlay(title, hint) {
         '<button class="scan-x" aria-label="Kapat">&#10005;</button></div>' +
       '<div class="scan-stage"><video playsinline muted></video><div class="scan-aim"></div></div>' +
       '<p class="scan-hint"></p>' +
+      '<p class="scan-diag"></p>' +
       '<div class="scan-foot"></div>' +
     "</div>";
   wrap.querySelector(".scan-hint").textContent = hint || "";
@@ -55,14 +56,28 @@ function overlay(title, hint) {
   return wrap;
 }
 
+// Barkodun okunabilmesi ÇÖZÜNÜRLÜĞE bağlı: 17 haneli şasi barkodunda ~990
+// ince çizgi var, her birine en az 2 piksel düşmezse çözülemez. Bu yüzden
+// kameradan olabilecek en büyük kareyi isteriz; cihaz veremezse kademeli
+// olarak daha küçüğünü deneriz.
+const CAM_TRY = [
+  { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+  { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+  { facingMode: { ideal: "environment" } },
+  true
+];
+
 async function startCamera(video) {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
-    audio: false
-  });
-  video.srcObject = stream;
-  await video.play();
-  return stream;
+  let son = null;
+  for (let i = 0; i < CAM_TRY.length; i++) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: CAM_TRY[i], audio: false });
+      video.srcObject = stream;
+      await video.play();
+      return stream;
+    } catch (e) { son = e; }
+  }
+  throw son || new Error("kamera açılamadı");
 }
 
 function stopCamera(stream) {
@@ -120,15 +135,62 @@ export function toLuminance(rgba, w, h) {
 // Gri tonlama veriden barkod metni. Bulunamazsa null (hata fırlatmaz).
 // Saf işlev: ZXing dışarıdan verilir, kamera veya DOM gerekmez — testte
 // üretilmiş bir barkod görüntüsüyle aynı yol koşturulur.
-export function decodeLuminance(ZX, lum, w, h) {
+// dondur=true: etiket dik tutulduysa görüntüyü 90° çevirip dener.
+export function decodeLuminance(ZX, lum, w, h, dondur) {
   try {
     const src = new ZX.RGBLuminanceSource(lum, w, h);
-    const bmp = new ZX.BinaryBitmap(new ZX.HybridBinarizer(src));
+    let bmp = new ZX.BinaryBitmap(new ZX.HybridBinarizer(src));
+    if (dondur) {
+      if (!bmp.isRotateSupported || !bmp.isRotateSupported()) return null;
+      bmp = bmp.rotateCounterClockwise();
+    }
     const reader = new ZX.MultiFormatReader();
     reader.setHints(zxHints(ZX));
     const res = reader.decode(bmp);
     return res ? String(res.getText() || "").trim() || null : null;
   } catch (e) { return null; }
+}
+
+/* ---------------- görüntüden barkod ---------------- */
+
+// Görüntünün bir bölgesini tuvale alır. oranY=0.5 → ortadaki yatay bant.
+// enBoy verilirse küçültür; VERİLMEZSE olduğu gibi bırakır (çözünürlük
+// barkod okumada en kritik şey, gereksiz yere küçültmeyiz).
+function cropCanvas(kaynak, gw, gh, oranY, enBoy) {
+  const ch = Math.max(1, Math.round(gh * oranY));
+  const sy = Math.round((gh - ch) / 2);
+  const k = enBoy && gw > enBoy ? enBoy / gw : 1;
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(gw * k));
+  cv.height = Math.max(1, Math.round(ch * k));
+  cv.getContext("2d", { willReadFrequently: true })
+    .drawImage(kaynak, 0, sy, gw, ch, 0, 0, cv.width, cv.height);
+  return cv;
+}
+
+function decodeCanvas(ZX, cv, dondur) {
+  const img = cv.getContext("2d", { willReadFrequently: true })
+                .getImageData(0, 0, cv.width, cv.height);
+  return decodeLuminance(ZX, toLuminance(img.data, cv.width, cv.height), cv.width, cv.height, dondur);
+}
+
+// Bir görüntüyü birkaç farklı kırpma ve çevirmeyle dener. Canlı kamerada
+// hız için kısa liste, çekilen fotoğrafta daha uzun liste kullanılır.
+// kaynak: <video>, <img> veya <canvas> — hepsi drawImage'a verilebilir.
+export function decodeImage(ZX, kaynak, gw, gh, genis) {
+  // [bandın dikey oranı, küçültme sınırı (0 = küçültme)]
+  const denemeler = genis
+    ? [[0.35, 0], [0.55, 0], [1, 0], [1, 1600], [0.55, 2400]]
+    : [[0.45, 0], [1, 1600]];
+  for (let i = 0; i < denemeler.length; i++) {
+    const oranY = denemeler[i][0];
+    const enBoy = denemeler[i][1];
+    const cv = cropCanvas(kaynak, gw, gh, oranY, enBoy || 0);
+    const d = decodeCanvas(ZX, cv, false);
+    if (d) return d;
+    if (genis) { const r = decodeCanvas(ZX, cv, true); if (r) return r; }
+  }
+  return null;
 }
 
 // Okuyucuyu seçer: önce cihazın yerleşik okuyucusu (hiçbir şey inmez),
@@ -155,13 +217,48 @@ async function makeDecoder(bilgi) {
   const ZX = await loadZxing();
   return {
     kind: "zxing",
+    zx: ZX,
     read: async function (video) {
-      const cv = grabFrame(video, 900);
-      const img = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height);
-      const txt = decodeLuminance(ZX, toLuminance(img.data, cv.width, cv.height), cv.width, cv.height);
+      const txt = decodeImage(ZX, video, video.videoWidth || 0, video.videoHeight || 0, false);
       return txt ? [txt] : [];
     }
   };
+}
+
+/* ---------------- çekilen fotoğraftan barkod ---------------- */
+
+// Telefonun kendi kamera uygulamasıyla fotoğraf çektirir. Neden? Canlı video
+// karesi 1280 piksel civarındadır; 17 haneli şasi barkodu için bu sınırda
+// kalır. Telefonun çektiği fotoğraf 4000 piksel genişliğindedir — üstelik
+// kişi netleme ve yakınlaştırma yapabilir. iPhone'da fark belirgindir.
+function pickPhoto() {
+  return new Promise(function (resolve) {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "image/*";
+    inp.setAttribute("capture", "environment");
+    inp.style.position = "fixed";
+    inp.style.left = "-9999px";
+    document.body.appendChild(inp);
+    inp.onchange = function () {
+      const f = inp.files && inp.files[0];
+      inp.remove();
+      resolve(f || null);
+    };
+    // Kişi çekmeden vazgeçerse onchange hiç gelmez; pencere kapanınca
+    // scanLabel zaten kendini temizler.
+    inp.click();
+  });
+}
+
+function fileToImage(file) {
+  return new Promise(function (resolve, reject) {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = function () { resolve({ im: im, url: url }); };
+    im.onerror = function () { URL.revokeObjectURL(url); reject(new Error("fotoğraf açılamadı")); };
+    im.src = url;
+  });
 }
 
 /* ---------------- barkod ---------------- */
@@ -195,13 +292,17 @@ export function scanLabel(known) {
     if (!cameraSupported()) { resolve(null); return; }
 
     const wrap = overlay("Etiketi okutun",
-      "Etiketin barkodlarını çerçeveye getirin. Okunanlar aşağıda görünür.");
+      "TEK bir barkodu çerçeveye sığdırın ve yaklaşın — bütün etiketi sığdırmaya çalışmayın.");
     const video = wrap.querySelector("video");
     const hint = wrap.querySelector(".scan-hint");
+    const diag = wrap.querySelector(".scan-diag");
     const foot = wrap.querySelector(".scan-foot");
-    foot.innerHTML = '<button class="btn btn-block" id="scan-done">Bitir</button>';
+    foot.innerHTML =
+      '<button class="btn btn-primary btn-block" id="scan-photo">📷 Fotoğraf çek ve oku</button>' +
+      '<button class="btn btn-block" id="scan-done">Bitir</button>';
 
-    let stream = null, timer = null, grace = null, done = false;
+    let stream = null, timer = null, grace = null, done = false, deneme = 0;
+    let decoder = null, fotoMod = false;
     const seen = [];
 
     const finish = function (iptal) {
@@ -217,6 +318,51 @@ export function scanLabel(known) {
     wrap.onclick = function (e) { if (e.target === wrap) finish(true); };
     foot.querySelector("#scan-done").onclick = function () { finish(seen.length === 0); };
 
+    // Alt satırdaki teknik bilgi: sorun çıkarsa neyin ne olduğunu görelim.
+    const tani = function () {
+      if (done) return;
+      const p = [];
+      p.push(decoder ? (decoder.kind === "native" ? "cihaz okuyucusu" : "sayfa içi okuyucu") : "hazırlanıyor");
+      if (video.videoWidth) p.push(video.videoWidth + "×" + video.videoHeight);
+      if (deneme) p.push(deneme + " kare");
+      diag.textContent = p.join(" · ");
+    };
+
+    // Telefonun kendi kamerasıyla fotoğraf: canlı kareden çok daha yüksek
+    // çözünürlük, netleme ve yakınlaştırma imkânı.
+    foot.querySelector("#scan-photo").onclick = async function () {
+      const btn = foot.querySelector("#scan-photo");
+      btn.disabled = true;
+      try {
+        const f = await pickPhoto();
+        if (!f || done) { btn.disabled = false; return; }
+        fotoMod = true;
+        if (grace) { clearTimeout(grace); grace = null; }
+        hint.textContent = "Fotoğraf okunuyor…";
+        hint.className = "scan-hint";
+        const ZX = (decoder && decoder.zx) || await loadZxing();
+        const g = await fileToImage(f);
+        let bulunan = null;
+        try {
+          bulunan = decodeImage(ZX, g.im, g.im.naturalWidth, g.im.naturalHeight, true);
+          diag.textContent = "fotoğraf " + g.im.naturalWidth + "×" + g.im.naturalHeight;
+        } finally { URL.revokeObjectURL(g.url); }
+        if (done) return;
+        if (bulunan) {
+          if (seen.indexOf(bulunan) === -1) seen.push(bulunan);
+          durum();
+        } else {
+          hint.textContent = "Bu fotoğrafta barkod çözülemedi. Tek barkoda yaklaşıp tekrar çekin.";
+          hint.className = "scan-hint scan-err";
+        }
+      } catch (e) {
+        if (!done) {
+          hint.textContent = "Okunamadı: " + ((e && e.message) || "") + ". Elle yazabilirsiniz.";
+          hint.className = "scan-hint scan-err";
+        }
+      } finally { btn.disabled = false; }
+    };
+
     const durum = function () {
       const c = classifyCodes(seen, known);
       const satir = [];
@@ -228,7 +374,12 @@ export function scanLabel(known) {
       // barkod göründükçe bu süre yeniden başlar.
       if (grace) clearTimeout(grace);
       if (c.chassis && c.saleCode) { finish(false); return; }
-      if (c.chassis) grace = setTimeout(function () { finish(false); }, 2500);
+      // Fotoğrafla okumada pencere kendiliğinden kapanmaz: kişi ikinci barkod
+      // için bir fotoğraf daha çekmek isteyebilir, "Bitir" ile kendi kapatır.
+      if (c.chassis && !fotoMod) grace = setTimeout(function () { finish(false); }, 2500);
+      if (c.chassis && fotoMod) {
+        hint.textContent += "  ·  Satış kodu için ikinci barkodu çekin ya da Bitir'e basın.";
+      }
     };
 
     const bilgi = function (t) { if (!done) hint.textContent = t; };
@@ -240,17 +391,20 @@ export function scanLabel(known) {
       stream = s;
       if (done) { stopCamera(s); return null; }
       return makeDecoder(bilgi);
-    }).then(function (decoder) {
-      if (!decoder || done) return;
+    }).then(function (d) {
+      if (!d || done) return;
+      decoder = d;
       // Sayfa içi çözücü kareyi kendi işler, biraz daha seyrek bakarız.
-      const aralik = decoder.kind === "native" ? 220 : 380;
+      const aralik = decoder.kind === "native" ? 220 : 400;
       let mesgul = false;
       durum();
+      tani();
       timer = setInterval(async function () {
         if (done || mesgul || video.readyState < 2) return;
         mesgul = true;
         try {
           const found = await decoder.read(video);
+          deneme++;
           let yeni = false;
           (found || []).forEach(function (raw) {
             if (raw && seen.indexOf(raw) === -1) { seen.push(raw); yeni = true; }
@@ -259,6 +413,7 @@ export function scanLabel(known) {
             if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
             durum();
           }
+          if (deneme % 5 === 0) tani();
         } catch (e) { /* kare okunamadı, bir sonrakini dene */ }
         finally { mesgul = false; }
       }, aralik);
