@@ -7,7 +7,7 @@ import { data, stepById, stepByCode, activeSteps, tractorById, tractorByChassis,
          ensureHistory, RECENT_DAYS } from "./store.js";
 import { myStepCode, can, canExact, myEmail } from "./auth.js";
 import * as flow from "./flow.js";
-import { scanBarcode, scanText, barcodeSupported, cameraSupported,
+import { scanLabel, scanText, barcodeSupported, cameraSupported,
          extractChassis, extractSaleCode } from "./scan.js";
 
 export function go(hash) { location.hash = hash; }
@@ -970,7 +970,7 @@ function newTractorDialog(onDone, presetChassis) {
         "</div>" +
         '<small class="field-hint" id="n-ch-hint">' +
           (barcodeSupported() && cameraSupported()
-            ? "Kamera simgesine basıp etiketteki barkodu okutun."
+            ? "Kamera simgesine basın ve etiketi okutun — barkodlu ne varsa alınır."
             : "Bu cihazda barkod okuyucu yok — numarayı elle yazın.") + "</small></label>" +
       '<label class="field"><span>Satış Kodu</span>' +
         '<div class="with-btn">' +
@@ -992,13 +992,29 @@ function newTractorDialog(onDone, presetChassis) {
   if (scanBtn) scanBtn.onclick = async function () {
     scanBtn.disabled = true;
     try {
-      const raw = await scanBarcode();
-      if (raw) {
-        const ch = extractChassis(raw) || normChassis(raw);
-        chIn.value = ch;
-        chHint.textContent = "Barkoddan okundu: " + ch;
-        chHint.className = "field-hint hint-ok";
-        if (!scIn.value && cameraSupported()) scIn.focus();
+      // Etiketteki bütün barkodlar okunur. Satış kodu da barkodluysa oradan
+      // gelir ve fotoğraf okumaya (OCR) hiç gerek kalmaz.
+      const r = await scanLabel(bilinenKodlar);
+      if (r) {
+        if (r.chassis) {
+          chIn.value = normChassis(r.chassis);
+          chHint.textContent = "Barkoddan okundu: " + chIn.value;
+          chHint.className = "field-hint hint-ok";
+        } else {
+          chHint.textContent = "Şasi barkodu okunamadı — elle yazın.";
+          chHint.className = "field-hint hint-err";
+        }
+        if (r.saleCode) {
+          scIn.value = r.saleCode;
+          scHint.textContent = "Barkoddan okundu: " + r.saleCode + " — bu okuma birebirdir.";
+          scHint.className = "field-hint hint-ok";
+        } else if (!scIn.value) {
+          scHint.textContent = cameraSupported()
+            ? "Satış kodu barkodda yok. Yandaki fotoğraf düğmesiyle okutun veya elle yazın."
+            : "Satış kodunu elle yazın.";
+          scHint.className = "field-hint";
+        }
+        if (!r.saleCode && cameraSupported()) scIn.focus();
       }
     } catch (e) { err(e); } finally { scanBtn.disabled = false; }
   };
