@@ -16,6 +16,16 @@ export const firebaseConfig = {
 
 // Sürüm damgası — her güncellemede değişir. Ekranın sol alt köşesinde görünür;
 // "güncelleme bu tablete ulaştı mı?" sorusunu tek bakışta cevaplar.
-export const APP_VERSION = "2026.09.15d";
+export const APP_VERSION = "2026.09.16a";
 
 export const PLANT_NAME = "TAFE Manisa";
+
+// Mesai düzeni. Bütün süre hesapları bunun DIŞINDAKİ saatleri saymaz: bir
+// traktör 17:30'da adıma girdiyse ertesi sabah 08:30'da "1 sa" görünür,
+// "15 sa" değil. Vardiya değişirse yalnızca burası düzenlenir.
+export const WORK = {
+  days: [1, 2, 3, 4, 5],          // Pazartesi–Cuma (0 = Pazar)
+  start: "08:00",
+  end: "18:00",
+  breaks: [["10:15", "10:30"], ["12:30", "12:45"], ["15:30", "15:45"]]
+};
