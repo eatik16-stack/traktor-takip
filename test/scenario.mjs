@@ -625,5 +625,81 @@ export async function runScenario(ctx) {
           scan.extractChassis("VIN *MEACBBBTAS4940949*") === "MEACBBBTAS4940949");
   }
 
+  /* ---------- 15b. Kameradan gelen görüntünün çözülmesi ----------
+     Telefonda takılan yer tam olarak burasıydı: kare doğru kırpılıp doğru
+     çözünürlükte çözücüye verilmezse barkod hiç okunmaz. Burada gerçek bir
+     tuval kullanılır, yani uygulamanın telefonda koştuğu yolun aynısı. */
+  if (scan && typeof document !== "undefined") {
+    const ZX = await new Promise(function (res) {
+      if (window.ZXing) { res(window.ZXing); return; }
+      const sc = document.createElement("script");
+      // Testte yerel node_modules'ten; telefonda aynı sürüm CDN'den iner.
+      sc.src = "/node_modules/@zxing/library/umd/index.min.js";
+      sc.onload = function () { res(window.ZXing || null); };
+      sc.onerror = function () { res(null); };
+      document.head.appendChild(sc);
+    });
+    check("Tarayıcı barkod çözücüsü yüklendi", !!ZX, "npm install yapılmamış olabilir");
+
+    if (ZX) {
+      const { barkodRGBA } = await import("./code39.mjs");
+      const sasi = "MEACBBBTAS4940949";
+
+      // Barkodu bir tuvale çizip uygulamanın decodeImage'ına veriyoruz.
+      const tuval = function (text, dar, dolguUst) {
+        const b = barkodRGBA(text, dar);
+        const cv = document.createElement("canvas");
+        cv.width = b.w;
+        cv.height = b.h + (dolguUst || 0) * 2;
+        const cx = cv.getContext("2d");
+        cx.fillStyle = "#fff";
+        cx.fillRect(0, 0, cv.width, cv.height);
+        const img = new ImageData(b.rgba, b.w, b.h);
+        cx.putImageData(img, 0, dolguUst || 0);
+        return cv;
+      };
+
+      const cv1 = tuval(sasi, 3, 0);
+      check("Tuvaldeki barkod çözülüyor",
+            scan.decodeImage(ZX, cv1, cv1.width, cv1.height, false) === sasi,
+            scan.decodeImage(ZX, cv1, cv1.width, cv1.height, false));
+
+      // Barkod karenin ortasında, üstünde ve altında boşluk varken de
+      // bulunmalı: canlı kamerada durum budur.
+      const cv2 = tuval(sasi, 3, 200);
+      check("Karenin ortasındaki barkod bulunuyor",
+            scan.decodeImage(ZX, cv2, cv2.width, cv2.height, false) === sasi,
+            scan.decodeImage(ZX, cv2, cv2.width, cv2.height, false));
+
+      // Fotoğraf yolu (geniş deneme listesi) aynı görüntüyü çözebilmeli.
+      check("Fotoğraf yolu da aynı barkodu çözüyor",
+            scan.decodeImage(ZX, cv2, cv2.width, cv2.height, true) === sasi);
+
+      // iOS'ta tuval belleği sınırlı: her kare için yeni tuval açılırsa sınır
+      // birkaç saniyede dolar ve okuma sessizce durur. Tek tuvalin yeniden
+      // kullanıldığını burada sabitliyoruz.
+      const orijinal = document.createElement.bind(document);
+      let acilanTuval = 0;
+      document.createElement = function (t) {
+        if (String(t).toLowerCase() === "canvas") acilanTuval++;
+        return orijinal(t);
+      };
+      try {
+        for (let i = 0; i < 20; i++) scan.decodeImage(ZX, cv2, cv2.width, cv2.height, false);
+      } finally { document.createElement = orijinal; }
+      check("Tekrarlı okumada yeni tuval açılmıyor (iOS bellek sınırı)",
+            acilanTuval <= 1, acilanTuval + " tuval açıldı");
+
+      // Barkod yoksa uydurmuyor.
+      const bos = document.createElement("canvas");
+      bos.width = 900; bos.height = 400;
+      const bcx = bos.getContext("2d");
+      bcx.fillStyle = "#fff"; bcx.fillRect(0, 0, bos.width, bos.height);
+      check("Boş karede barkod bulunmuyor",
+            scan.decodeImage(ZX, bos, bos.width, bos.height, false) === null,
+            scan.decodeImage(ZX, bos, bos.width, bos.height, false));
+    }
+  }
+
   return results;
 }

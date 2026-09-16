@@ -416,6 +416,11 @@ table.data tbody tr.clickable:active { background:var(--bg); }
 .scan-aim { position:absolute; left:8%; right:8%; top:32%; bottom:32%;
   border:2px solid rgba(255,255,255,.9); border-radius:10px;
   box-shadow:0 0 0 2000px rgba(0,0,0,.28); }
-.scan-hint { padding:10px 14px; font-size:12.5px; color:var(--muted); }
+.scan-hint { padding:10px 14px 2px; font-size:12.5px; color:var(--muted); }
 .scan-hint.scan-err { color:var(--red); font-weight:600; }
-.scan-foot { padding:0 14px calc(14px + var(--safe-b)); }
+.scan-hint.hint-ok { color:var(--green); font-weight:600; }
+/* Okuyucu türü, kare boyutu, denenen kare sayısı. Sahada bir sorun olursa
+   "ne oluyor" sorusunu ekran görüntüsünden cevaplar. */
+.scan-diag { padding:0 14px 10px; margin:0; font-size:11px; color:var(--muted);
+  opacity:.7; font-variant-numeric:tabular-nums; }
+.scan-foot { padding:0 14px calc(14px + var(--safe-b)); display:grid; gap:8px; }
