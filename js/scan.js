@@ -153,42 +153,72 @@ export function decodeLuminance(ZX, lum, w, h, dondur) {
 
 /* ---------------- görüntüden barkod ---------------- */
 
-// Görüntünün bir bölgesini tuvale alır. oranY=0.5 → ortadaki yatay bant.
-// enBoy verilirse küçültür; VERİLMEZSE olduğu gibi bırakır (çözünürlük
-// barkod okumada en kritik şey, gereksiz yere küçültmeyiz).
-function cropCanvas(kaynak, gw, gh, oranY, enBoy) {
+// TEK bir çalışma tuvali. Her kare için yeni tuval AÇILMAZ: iOS'ta tuval
+// belleği sınırlıdır, saniyede birkaç tane açılınca sınır birkaç saniyede
+// dolar ve o andan sonra drawImage/getImageData sessizce BOŞ görüntü verir —
+// kamera görüntüsü ekranda dururken okuma hiç çalışmaz. Hatanın sebebi buydu.
+let scratch = null, scratchCx = null;
+
+function scratchCanvas(w, h) {
+  if (!scratch) {
+    scratch = document.createElement("canvas");
+    scratchCx = scratch.getContext("2d", { willReadFrequently: true });
+  }
+  if (scratch.width !== w) scratch.width = w;
+  if (scratch.height !== h) scratch.height = h;
+  return scratch;
+}
+
+// Pencere kapanınca tuvali küçültüp belleği bırakırız.
+function releaseScratch() {
+  if (scratch) { scratch.width = 1; scratch.height = 1; }
+}
+
+// Görüntünün bir bölgesini çalışma tuvaline alır. oranY=0.5 → ortadaki yatay
+// bant. enBoy sınırı hem hız hem de iOS bellek sınırı için vardır; barkod
+// çözmede çözünürlük kritik olduğundan sınır geniş tutulur.
+function drawCrop(kaynak, gw, gh, oranY, enBoy) {
   const ch = Math.max(1, Math.round(gh * oranY));
   const sy = Math.round((gh - ch) / 2);
   const k = enBoy && gw > enBoy ? enBoy / gw : 1;
-  const cv = document.createElement("canvas");
-  cv.width = Math.max(1, Math.round(gw * k));
-  cv.height = Math.max(1, Math.round(ch * k));
-  cv.getContext("2d", { willReadFrequently: true })
-    .drawImage(kaynak, 0, sy, gw, ch, 0, 0, cv.width, cv.height);
+  const w = Math.max(1, Math.round(gw * k));
+  const h = Math.max(1, Math.round(ch * k));
+  const cv = scratchCanvas(w, h);
+  scratchCx.drawImage(kaynak, 0, sy, gw, ch, 0, 0, w, h);
   return cv;
 }
 
-function decodeCanvas(ZX, cv, dondur) {
-  const img = cv.getContext("2d", { willReadFrequently: true })
-                .getImageData(0, 0, cv.width, cv.height);
-  return decodeLuminance(ZX, toLuminance(img.data, cv.width, cv.height), cv.width, cv.height, dondur);
+// Son okunan karenin ortalama parlaklığı. 0 veya 255'e yapışık kalıyorsa
+// tuvale hiçbir şey çizilmiyor demektir — tanı satırında görünür.
+export let lastFrameMean = -1;
+
+function decodeCanvas(ZX, cv, dondur, olc) {
+  const img = scratchCx.getImageData(0, 0, cv.width, cv.height);
+  const lum = toLuminance(img.data, cv.width, cv.height);
+  if (olc) {
+    let t = 0;
+    const adim = Math.max(1, Math.floor(lum.length / 4000));
+    let n = 0;
+    for (let i = 0; i < lum.length; i += adim) { t += lum[i]; n++; }
+    lastFrameMean = n ? Math.round(t / n) : -1;
+  }
+  return decodeLuminance(ZX, lum, cv.width, cv.height, dondur);
 }
 
 // Bir görüntüyü birkaç farklı kırpma ve çevirmeyle dener. Canlı kamerada
 // hız için kısa liste, çekilen fotoğrafta daha uzun liste kullanılır.
 // kaynak: <video>, <img> veya <canvas> — hepsi drawImage'a verilebilir.
 export function decodeImage(ZX, kaynak, gw, gh, genis) {
-  // [bandın dikey oranı, küçültme sınırı (0 = küçültme)]
+  if (!gw || !gh) return null;
+  // [bandın dikey oranı, küçültme sınırı (0 = küçültme yok)]
   const denemeler = genis
-    ? [[0.35, 0], [0.55, 0], [1, 0], [1, 1600], [0.55, 2400]]
-    : [[0.45, 0], [1, 1600]];
+    ? [[0.4, 2000], [1, 2000], [0.4, 1200], [1, 1200], [1, 2800]]
+    : [[0.5, 1600], [1, 1400]];
   for (let i = 0; i < denemeler.length; i++) {
-    const oranY = denemeler[i][0];
-    const enBoy = denemeler[i][1];
-    const cv = cropCanvas(kaynak, gw, gh, oranY, enBoy || 0);
-    const d = decodeCanvas(ZX, cv, false);
+    const cv = drawCrop(kaynak, gw, gh, denemeler[i][0], denemeler[i][1]);
+    const d = decodeCanvas(ZX, cv, false, i === 0);
     if (d) return d;
-    if (genis) { const r = decodeCanvas(ZX, cv, true); if (r) return r; }
+    if (genis) { const r = decodeCanvas(ZX, cv, true, false); if (r) return r; }
   }
   return null;
 }
@@ -311,6 +341,7 @@ export function scanLabel(known) {
       if (timer) clearInterval(timer);
       if (grace) clearTimeout(grace);
       stopCamera(stream);
+      releaseScratch();
       wrap.remove();
       resolve(iptal ? null : classifyCodes(seen, known));
     };
@@ -325,6 +356,8 @@ export function scanLabel(known) {
       p.push(decoder ? (decoder.kind === "native" ? "cihaz okuyucusu" : "sayfa içi okuyucu") : "hazırlanıyor");
       if (video.videoWidth) p.push(video.videoWidth + "×" + video.videoHeight);
       if (deneme) p.push(deneme + " kare");
+      // Parlaklık: kameradan gerçekten görüntü alınıp alınmadığını gösterir.
+      if (lastFrameMean >= 0) p.push("ışık " + lastFrameMean);
       diag.textContent = p.join(" · ");
     };
 
