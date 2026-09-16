@@ -264,6 +264,9 @@ table.data tbody tr.clickable:active { background:var(--bg); }
 .tl-item.current::before { background:var(--blue);  border-color:var(--blue); }
 /* Geri gönderilen adım: tamamlanmış görünmemeli, yeniden yapılacak. */
 .tl-item.redo::before    { background:var(--amber); border-color:var(--amber); }
+/* İşi olmadığı için uğranmayan istasyon. */
+.tl-item.skipped         { opacity:.6; }
+.tl-item.skipped::before  { background:var(--line); border-color:var(--line); }
 .tl-title { font-weight:600; font-size:13.5px; }
 .tl-meta  { color:var(--muted); font-size:12px; }
 
@@ -390,3 +393,29 @@ table.data tbody tr.clickable:active { background:var(--bg); }
 .net-bar { position:fixed; left:0; right:0; top:0; z-index:80; background:var(--amber); color:#fff;
   font-size:12.5px; font-weight:600; text-align:center; padding:6px 12px;
   padding-top:calc(6px + env(safe-area-inset-top, 0px)); }
+
+/* ---------------- barkod / etiket okuma ---------------- */
+
+/* Alanın yanındaki kamera düğmesi */
+.with-btn { display:flex; gap:8px; align-items:stretch; }
+.with-btn .input { flex:1; min-width:0; }
+.with-btn .btn { flex:0 0 auto; padding:0 14px; font-size:19px; }
+
+.scan-back { position:fixed; inset:0; z-index:90; background:rgba(15,23,42,.72);
+  display:flex; align-items:center; justify-content:center; padding:12px; }
+.scan-box { width:100%; max-width:560px; background:#fff; border-radius:16px; overflow:hidden;
+  display:flex; flex-direction:column; }
+.scan-head { display:flex; align-items:center; gap:10px; padding:12px 14px;
+  border-bottom:1px solid var(--line); font-size:15px; }
+.scan-head strong { flex:1; }
+.scan-x { border:0; background:none; font-size:20px; line-height:1; cursor:pointer;
+  color:var(--muted); min-width:var(--tap); min-height:var(--tap); }
+.scan-stage { position:relative; background:#000; aspect-ratio:4/3; }
+.scan-stage video { width:100%; height:100%; object-fit:cover; display:block; }
+/* Nişangah: etiketi buraya getir. */
+.scan-aim { position:absolute; left:8%; right:8%; top:32%; bottom:32%;
+  border:2px solid rgba(255,255,255,.9); border-radius:10px;
+  box-shadow:0 0 0 2000px rgba(0,0,0,.28); }
+.scan-hint { padding:10px 14px; font-size:12.5px; color:var(--muted); }
+.scan-hint.scan-err { color:var(--red); font-weight:600; }
+.scan-foot { padding:0 14px calc(14px + var(--safe-b)); }

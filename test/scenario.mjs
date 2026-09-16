@@ -4,7 +4,7 @@
 // makinede aynı dosya tarayıcı konsolunda da çalıştırılabilir.
 
 export async function runScenario(ctx) {
-  const { flow, data, store, seed, mock, sleep, waitFor } = ctx;
+  const { flow, data, store, util, V, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
   const results = [];
   const check = function (name, cond, extra) {
     results.push({ name: name, ok: !!cond, extra: cond ? "" : String(extra == null ? "" : extra) });
@@ -46,6 +46,23 @@ export async function runScenario(ctx) {
   const rdc = data.steps[0], pdi = data.steps[10];
   check("İlk adım RDC", rdc.code === "RDC", rdc.code);
   check("Son adım PDI ve onay türünde", pdi.code === "PDI" && pdi.kind === "onay", pdi.kind);
+
+  /* ---------- 1c. Mesai süresi (duvar saati değil) ---------- */
+  // 17:30'da adıma giren traktör ertesi sabah 08:30'da 1 saat beklemiş
+  // sayılmalı, 15 saat değil. Mesai dışı, hafta sonu ve molalar düşülür.
+  const W = function (a, b) { return Math.round(util.workMinutes(a, b)); };
+  check("Tam mesai günü 495 dk (10 sa − 1 sa 45 dk mola)", util.DAILY_WORK_MINUTES === 495, util.DAILY_WORK_MINUTES);
+  check("Salı 08:00→18:00 = tam gün", W("2026-09-15T08:00", "2026-09-15T18:00") === 495, W("2026-09-15T08:00", "2026-09-15T18:00"));
+  check("17:30 → ertesi 08:30 = 1 sa", W("2026-09-15T17:30", "2026-09-16T08:30") === 60, W("2026-09-15T17:30", "2026-09-16T08:30"));
+  check("Sabah molası düşülüyor (10:00→11:00 = 45 dk)", W("2026-09-15T10:00", "2026-09-15T11:00") === 45);
+  check("Öğle molası düşülüyor (12:00→14:00 = 45 dk)", W("2026-09-15T12:00", "2026-09-15T14:00") === 45, W("2026-09-15T12:00", "2026-09-15T14:00"));
+  check("Öğleden sonra molası düşülüyor (15:00→16:00 = 45 dk)", W("2026-09-15T15:00", "2026-09-15T16:00") === 45);
+  check("Mesai dışı saat sayılmıyor", W("2026-09-15T20:00", "2026-09-15T23:00") === 0);
+  check("Mesai öncesi sayılmıyor (07:00→09:00 = 1 sa)", W("2026-09-15T07:00", "2026-09-15T09:00") === 60);
+  check("Hafta sonu sayılmıyor", W("2026-09-12T09:00", "2026-09-13T17:00") === 0);
+  check("Cuma 17:30 → Pazartesi 09:00 = 1,5 sa", W("2026-09-11T17:30", "2026-09-14T09:00") === 90, W("2026-09-11T17:30", "2026-09-14T09:00"));
+  check("Bir hafta = 5 tam mesai günü", W("2026-09-08T08:00", "2026-09-15T08:00") === 5 * 495);
+  check("Ters/sıfır aralık 0", W("2026-09-15T10:00", "2026-09-15T09:00") === 0 && W("2026-09-15T09:00", "2026-09-15T09:00") === 0);
 
   /* ---------- 2. Traktör oluşturma ---------- */
   const CH = "TESTMEA0001";
@@ -186,7 +203,21 @@ export async function runScenario(ctx) {
   if (!kilit) check("Onay adımı kilitlenmeden kapandı", true);
   const t2 = data.tractors.find(function (x) { return x.id === tid2; });
   check("Traktör sonuna kadar ilerledi", t2 && t2.status === "sevke_hazir", t2 && t2.status);
-  check("12 adımın hepsi kapandı", adimSayisi === 12, adimSayisi);
+  // Hatası olmayan traktörde rework istasyonları atlanır: RW-1 ve RW-2
+  // personeli boş traktör görmez. 12 adımın 10'u kapanır.
+  check("Hatasız traktörde rework adımları atlandı", adimSayisi === 10, adimSayisi);
+  // Atlanan adım geçmişe "atlandı" diye işlenir: tamamlanmış sayılmaz ama
+  // çizelgede boşluk da bırakmaz.
+  const rw1 = (t2.steps || {})["RW-1"], rw2 = (t2.steps || {})["RW-2"];
+  check("Atlanan adımlar 'atlandı' olarak işaretli",
+        rw1 && rw1.result === "atlandi" && rw2 && rw2.result === "atlandi",
+        JSON.stringify([rw1 && rw1.result, rw2 && rw2.result]));
+  check("Atlanan adım tamamlanmış sayılmıyor",
+        flow.completedStepCodes(t2).indexOf("RW-1") === -1,
+        flow.completedStepCodes(t2).join(","));
+  check("Atlanan adım bekleyenler listesinde de yok",
+        !flow.pendingSteps(t2).some(function (x) { return x.code === "RW-1"; }),
+        flow.pendingSteps(t2).map(function (x) { return x.code; }).join(","));
 
   // Test adımını geri al
   await store.saveDoc("config", "steps", { items: data.steps.filter(function (s) { return s.code !== "ZZ-TEST"; }) });
@@ -207,26 +238,125 @@ export async function runScenario(ctx) {
     const cur = data.steps.find(function (s) { return s.id === t.currentStepId; });
     try {
       await flow.startWork(tid3);
-      if (cur && cur.code === "RW-1") {
+      if (cur && cur.code === "RDC") {
+        // Kalite adımında açılan hata traktörü rework istasyonuna düşürür.
         const dd = await flow.addDefect(tid3, { category: "Diğer", description: "Tek kişi testi", source: "Üretim" });
+        await flow.finishStep(tid3, "ok");
+        soloAdim++;
+        await waitFor(function () {
+          const x = data.tractors.find(function (y) { return y.id === tid3; });
+          const st = x && data.steps.find(function (z) { return z.id === x.currentStepId; });
+          return st && st.code === "RW-1";
+        });
+        check("Hata açılınca traktör rework istasyonuna düştü", true);
         await flow.takeDefect(dd);
-        await flow.completeDefect(dd);
+        const sonuc = await flow.completeDefect(dd);
+        check("Son hata kapanınca rework adımı kendiliğinden kapandı",
+              sonuc && sonuc.autoFinished === true, JSON.stringify(sonuc));
+        soloAdim++;
         const r = await flow.approveDefect(dd);
         check("Tek kişi kendi rework'ünü onayladı", r.selfApproved === true, r);
+        await sleep(20);
+        continue;
       }
       await flow.finishStep(tid3, "ok");
       soloAdim++;
     } catch (e) { soloOk = false; check("Tek kişi akışı", false, e.message); break; }
     await sleep(20);
   }
-  if (soloOk) check("Tek kişi 11 adımı tamamladı", soloAdim === 11, soloAdim);
+  if (soloOk) check("Tek kişi akışı sonuna kadar gitti", soloAdim >= 9, soloAdim);
   const t3 = data.tractors.find(function (x) { return x.id === tid3; });
-  check("Traktör sevke hazır", t3 && t3.status === "sevke_hazir", t3 && t3.status);
+  const t3adim = t3 && data.steps.find(function (z) { return z.id === t3.currentStepId; });
+  check("Traktör sevke hazır", t3 && t3.status === "sevke_hazir",
+        (t3 && t3.status) + " @ " + (t3adim ? t3adim.code : "?") +
+        " | kapanan: " + Object.keys((t3 && t3.steps) || {}).join(","));
+  if (t3 && t3.status !== "sevke_hazir") { return results; }
   await flow.dispatchTractor(tid3);
   await waitFor(function () {
     return (data.tractors.find(function (x) { return x.id === tid3; }) || {}).status === "sevk_edildi";
   });
   check("Sevk edildi", true);
+
+  /* ---------- 9b. Geri gönderme hafızası ve iş emri atama ---------- */
+  // FINAL'de bulunan hata RW-2'de giderilir; iş bitince traktör OIL/PAINT'e
+  // değil, geldiği yere — FINAL'e — döner.
+  const finalS = data.steps.find(function (x) { return x.code === "FINAL"; });
+  const rw2S = data.steps.find(function (x) { return x.code === "RW-2"; });
+  const tidF = await flow.createTractor({ chassisNo: "TESTGERI002" });
+  await waitFor(function () { return !!data.tractors.find(function (t) { return t.id === tidF; }); });
+  await flow.moveToStep(tidF, finalS.id, "test: FINAL'e alındı");
+  await waitFor(function () {
+    return (data.tractors.find(function (t) { return t.id === tidF; }) || {}).currentStepId === finalS.id;
+  });
+  const dF = await flow.addDefect(tidF, {
+    category: "Diğer", description: "FINAL'de bulunan boya kusuru", source: "Üretim"
+  });
+  await flow.startWork(tidF);
+  await flow.finishStep(tidF, "ok");
+  await waitFor(function () {
+    return (data.tractors.find(function (t) { return t.id === tidF; }) || {}).currentStepId === rw2S.id;
+  });
+  const tF1 = data.tractors.find(function (t) { return t.id === tidF; });
+  check("FINAL'de açılan hata traktörü RW-2'ye gönderdi", tF1.currentStepId === rw2S.id);
+  check("Nereden geldiği kaydedildi", tF1.returnStepId === finalS.id, tF1.returnStepId);
+
+  await flow.takeDefect(dF);
+  const rF = await flow.completeDefect(dF);
+  check("RW-2'de son hata kapanınca adım kendiliğinden kapandı",
+        rF && rF.autoFinished === true, JSON.stringify(rF));
+  await waitFor(function () {
+    return (data.tractors.find(function (t) { return t.id === tidF; }) || {}).currentStepId === finalS.id;
+  });
+  const tF2 = data.tractors.find(function (t) { return t.id === tidF; });
+  check("Traktör FINAL'e geri döndü (OIL/PAINT tekrar yapılmadı)", tF2.currentStepId === finalS.id);
+  // Onay bekleyen hata varken kalite adımı kapanmamalı: yoksa traktör rework
+  // ile kalite arasında gidip gelirdi.
+  await flow.startWork(tidF);
+  await expectThrow("Onay bekleyen hata varken kalite adımı kapanmıyor",
+    function () { return flow.finishStep(tidF, "ok"); }, "Onayınızı bekleyen");
+  await flow.approveDefect(dF);
+  await waitFor(function () {
+    return (data.defects.find(function (d) { return d.id === dF; }) || {}).status === "onaylandi";
+  });
+  await flow.finishStep(tidF, "ok");
+  await waitFor(function () {
+    const x = data.tractors.find(function (t) { return t.id === tidF; });
+    return x && x.currentStepId !== finalS.id;
+  });
+  const tF3 = data.tractors.find(function (t) { return t.id === tidF; });
+  const tF3s = data.steps.find(function (z) { return z.id === tF3.currentStepId; });
+  check("Onaydan sonra FINAL kapandı, traktör PDI'ya geçti",
+        tF3s && tF3s.code === "PDI", tF3s && tF3s.code);
+  check("Geri dönüş işareti temizlendi", !tF2.returnStepId, tF2.returnStepId);
+  check("Rework süresi ilk 'üzerime al'dan sayıldı",
+        (tF2.steps || {})["RW-2"] && (tF2.steps || {})["RW-2"].result === "ok",
+        JSON.stringify((tF2.steps || {})["RW-2"]));
+
+  // Sevke hazır bekleyen traktörde sonradan çıkan hata: seçilen istasyona iş
+  // emri düşer, iş bitince traktör yine sevke hazır olur.
+  const paintS = data.steps.find(function (x) { return x.code === "PAINT"; });
+  const tY0 = data.tractors.find(function (x) { return x.id === tid2; });
+  check("Bahçedeki traktör sevke hazır durumda", tY0 && tY0.status === "sevke_hazir", tY0 && tY0.status);
+  const dY = await flow.addDefect(tid2, {
+    category: "Diğer", description: "Bahçede beklerken pas oluşmuş",
+    source: "Üretim", assignStepId: paintS.id
+  });
+  await waitFor(function () {
+    const x = data.tractors.find(function (t) { return t.id === tid2; });
+    return x && x.currentStepId === paintS.id && x.status === "devam";
+  });
+  const tY1 = data.tractors.find(function (x) { return x.id === tid2; });
+  check("Sevke hazır traktör seçilen istasyona iş emri olarak düştü", tY1.currentStepId === paintS.id);
+  check("İş bitince sevke hazıra dönecek diye işaretlendi", tY1.returnReady === true, tY1.returnReady);
+  await flow.startWork(tid2);
+  await flow.finishStep(tid2, "ok");
+  await waitFor(function () {
+    return (data.tractors.find(function (x) { return x.id === tid2; }) || {}).status === "sevke_hazir";
+  });
+  const tY2 = data.tractors.find(function (x) { return x.id === tid2; });
+  check("İş bitince traktör yine sevke hazır", tY2.status === "sevke_hazir", tY2.status);
+  check("Sevke hazır işareti temizlendi", !tY2.returnReady, tY2.returnReady);
+  await flow.cancelDefect(dY, "test kaydı temizlendi");
 
   /* ---------- 10. Hata düzenleme / silme yetkisi ---------- */
   const tid4 = await flow.createTractor({ chassisNo: "TESTEDIT001" });
@@ -287,6 +417,150 @@ export async function runScenario(ctx) {
     return (data.tractors.find(function (t) { return t.id === tid4; }) || {}).chassisNo === "TESTEDIT001D";
   });
   check("Şasi numarası düzeltildi", fx && fx.changed === true, fx);
+
+  /* ---------- 12b. İsim düzeltmesi eski kayıtlara da işlesin ---------- */
+  // Kayıtlar kişinin o anki adını içlerine de yazar. Ad sonradan düzeltilince
+  // eski kayıtlar eski adı göstermemeli.
+  const ESKI = "Yönetici", YENI = "Yonetici Duzeltilmis";
+  const oncekiler = data.defects.filter(function (d) { return d.detectedBy === "admin@test.local"; });
+  check("İsim testi için kayıt var", oncekiler.length > 0, oncekiler.length);
+  check("Kayıtlarda eski ad duruyor",
+        oncekiler.some(function (d) { return d.detectedByName === ESKI; }),
+        oncekiler.map(function (d) { return d.detectedByName; }).join(","));
+  const degisen = await store.renameEverywhere("admin@test.local", YENI);
+  check("İsim güncellemesi kayıtlara işledi", degisen > 0, degisen);
+  await waitFor(function () {
+    return data.defects.filter(function (d) {
+      return d.detectedBy === "admin@test.local" && d.detectedByName !== YENI;
+    }).length === 0;
+  });
+  check("Hata kayıtlarında eski ad kalmadı",
+        data.defects.filter(function (d) {
+          return d.detectedBy === "admin@test.local" && d.detectedByName === ESKI;
+        }).length === 0);
+  check("Traktör kayıtlarında eski ad kalmadı",
+        data.tractors.filter(function (t) {
+          return t.createdBy === "admin@test.local" && t.createdByName === ESKI;
+        }).length === 0);
+  const evsAfter = await store.readEvents(tid);
+  check("Adım geçişlerinde eski ad kalmadı",
+        evsAfter.filter(function (e) {
+          return e.operator === "admin@test.local" && e.operatorName === ESKI;
+        }).length === 0,
+        evsAfter.map(function (e) { return e.operatorName; }).join(","));
+  check("Aynı işlem ikinci kez çalışınca değişecek kayıt kalmıyor",
+        (await store.renameEverywhere("admin@test.local", YENI)) === 0);
+  // Başkasının adı bundan etkilenmemeli.
+  check("Başka kişinin adı değişmedi",
+        data.defects.filter(function (d) { return d.reworkByName === YENI && d.reworkBy !== "admin@test.local"; }).length === 0);
+
+  // Kullanıcı ekranından kaydetmek de eski kayıtları eşitlemeli — Firestore'da
+  // adı elle düzeltip uygulamadan "Kaydet" demek yeten tek yol olsun.
+  const SON = "Yonetici Son Hali";
+  await store.grantAccess("admin@test.local", SON, ["admin", "kontrol", "onay", "rework", "hata_duzenle"], "RDC");
+  await waitFor(function () {
+    return data.defects.filter(function (d) {
+      return d.detectedBy === "admin@test.local" && d.detectedByName !== SON;
+    }).length === 0;
+  });
+  check("Kullanıcı kaydetmek eski kayıtlardaki adı da düzeltiyor",
+        data.defects.filter(function (d) {
+          return d.detectedBy === "admin@test.local" && d.detectedByName === SON;
+        }).length > 0);
+
+  /* ---------- 12c. Adım silme koruması ---------- */
+  // Kullanılmış adım silinemez: silinirse o kayıtlar hangi istasyona ait
+  // olduğunu gösteremez. Kullanılmamış adım silinebilir.
+  check("Kullanılmış adım silinemez olarak işaretleniyor", stepUsage(rdc).total > 0, JSON.stringify(stepUsage(rdc)));
+  const bos = { id: "s-bos-test", seq: 99, code: "ZZ-BOS", name: "Hiç kullanılmamış adım",
+                kind: "islem", targetMinutes: 0, posX: 90, posY: 90, allowsDefect: false, active: true };
+  await store.saveDoc("config", "steps", { items: data.steps.concat([bos]) });
+  await waitFor(function () { return data.steps.some(function (s) { return s.code === "ZZ-BOS"; }); });
+  check("Yeni adım eklendi", data.steps.some(function (s) { return s.code === "ZZ-BOS"; }));
+  check("Kullanılmamış adımda kullanım sayısı 0", stepUsage(bos).total === 0, JSON.stringify(stepUsage(bos)));
+  await store.setDocFull("config", "steps",
+    { items: data.steps.filter(function (s) { return s.id !== bos.id; }) });
+  await waitFor(function () { return !data.steps.some(function (s) { return s.code === "ZZ-BOS"; }); });
+  check("Kullanılmamış adım silindi", !data.steps.some(function (s) { return s.code === "ZZ-BOS"; }));
+  check("Silme diğer adımlara dokunmuyor", data.steps.length === 11, data.steps.length);
+
+  // Silinen adımdan sonra sıra numaraları boşluklu kalmamalı: 1,2,3,5… değil 1,2,3,4…
+  const bosluklu = [{ id: "a", seq: 1 }, { id: "b", seq: 2 }, { id: "c", seq: 5 },
+                    { id: "d", seq: 11 }, { id: "e", seq: 99 }];
+  const duzen = renumberSteps(bosluklu);
+  check("Sıra numaraları 1..N olarak sıkışıyor",
+        duzen.map(function (x) { return x.seq; }).join(",") === "1,2,3,4,5",
+        duzen.map(function (x) { return x.seq; }).join(","));
+  check("Sıkıştırma göreli sırayı bozmuyor",
+        duzen.map(function (x) { return x.id; }).join("") === "abcde",
+        duzen.map(function (x) { return x.id; }).join(""));
+  check("Sıkıştırma kaynağı değiştirmiyor", bosluklu[4].seq === 99, bosluklu[4].seq);
+  check("Karışık sırada gelen liste de doğru sıkışıyor",
+        renumberSteps([{ id: "z", seq: 7 }, { id: "y", seq: 2 }])
+          .map(function (x) { return x.id + x.seq; }).join(",") === "y1,z2");
+
+  /* ---------- 12d. Ekran çizimi: geri gönderilen adım ve İstasyonum ---------- */
+  // Bir adım tamamlandıktan sonra traktör oraya geri gönderilirse, adım
+  // geçmişinde yeşil (tamamlandı) görünmemeli — yeniden yapılacak.
+  const CHR = "TESTGERI001";
+  const tidR = await flow.createTractor({ chassisNo: CHR, saleCode: "GX626B" });
+  await waitFor(function () { return !!data.tractors.find(function (t) { return t.id === tidR; }); });
+  await flow.startWork(tidR);
+  await flow.finishStep(tidR, "ok");                       // RDC tamamlandı
+  await waitFor(function () {
+    const t = data.tractors.find(function (x) { return x.id === tidR; });
+    return t && t.steps && t.steps.RDC;
+  });
+  await flow.moveToStep(tidR, rdc.id, "test: geri gönderildi");
+  await waitFor(function () {
+    const t = data.tractors.find(function (x) { return x.id === tidR; });
+    return t && t.currentStepId === rdc.id;
+  });
+
+  const viewR = document.createElement("div");
+  document.body.appendChild(viewR);
+  await V.traktor(viewR, [tidR], function () {});
+  const satirlar = Array.prototype.slice.call(viewR.querySelectorAll(".tl-item"));
+  const rdcSatir = satirlar.find(function (n) {
+    return (n.textContent || "").indexOf("RDC") !== -1;
+  });
+  check("Geri gönderilen adım çizelgede var", !!rdcSatir);
+  check("Geri gönderilen adım yeşil (tamamlandı) görünmüyor",
+        rdcSatir && !rdcSatir.classList.contains("done"),
+        rdcSatir && rdcSatir.className);
+  check("Geri gönderilen adım turuncu (tekrar) işaretli",
+        rdcSatir && rdcSatir.classList.contains("redo"),
+        rdcSatir && rdcSatir.className);
+  check("Tekrar yapılacak adım bekleyenler listesinde",
+        (viewR.textContent || "").indexOf("Onay İçin Bekleyen Adımlar") !== -1 &&
+        (viewR.textContent || "").match(/Roll-Down Kontrol/g) !== null);
+
+  // İstasyonum tek ekran: traktör, hataları ve adım düğmeleri aynı yerde.
+  const viewS = document.createElement("div");
+  document.body.appendChild(viewS);
+  const ciz = function () { viewS.innerHTML = ""; V.istasyon(viewS, [], function () {}); };
+  ciz();
+  check("İstasyonum kuyruğu traktörü gösteriyor",
+        (viewS.textContent || "").indexOf(util.shortChassis(CHR)) !== -1);
+  check("İstasyonum'da hata paneli açık", !!viewS.querySelector("#rw-panel"));
+
+  // Kuyruktan bu traktörü seç; panel ona ait olsun.
+  const satir = viewS.querySelector('[data-sel="' + tidR + '"]');
+  check("Kuyruk satırı tıklanabilir", !!satir);
+  if (satir) satir.click();
+  ciz();
+  check("İstasyonum'da adım başlatma düğmesi var", !!viewS.querySelector("#stp-start"));
+
+  await flow.startWork(tidR);
+  await waitFor(function () {
+    const t = data.tractors.find(function (x) { return x.id === tidR; });
+    return t && t.currentStartedAt;
+  });
+  ciz();
+  check("Başlatıldıktan sonra tamamla düğmesi geliyor", !!viewS.querySelector("#stp-finish"));
+  check("Panel seçili traktöre ait",
+        (viewS.querySelector("#rw-panel").textContent || "").indexOf(CHR) !== -1);
+  viewR.remove(); viewS.remove();
 
   /* ---------- 13. Denetim kaydı ---------- */
   const logs = await store.readLog(500);

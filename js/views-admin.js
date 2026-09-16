@@ -16,7 +16,9 @@ function err(e) { toast((e && e.message) || "İşlem tamamlanamadı.", "err"); }
 
 /* ================= Yönetim raporu ================= */
 
-let repDays = 30;
+// Varsayılan dönem BUGÜN: ekran açıldığında vardiyanın o günkü durumu
+// görünsün; geçmiş dönemler açılır listeden seçilir.
+let repDays = 1;
 
 function buildReport(days) {
   const d1 = new Date(); d1.setHours(23, 59, 59, 999);
@@ -135,8 +137,9 @@ export function rapor(view, _p, rerender) {
       " · " + fmtDate(new Date()) + " itibarıyla</p></div>" +
       '<div class="spacer"></div>' +
       '<label class="field" style="margin:0;min-width:150px"><span>Dönem</span>' +
-      '<select class="input" id="r-days">' + [7, 30, 90, 180, 365].map(function (x) {
-        return '<option value="' + x + '"' + (x === repDays ? " selected" : "") + ">Son " + x + " gün</option>";
+      '<select class="input" id="r-days">' + [[1, "Bugün"], [7, "Son 7 gün"], [30, "Son 30 gün"],
+        [90, "Son 90 gün"], [180, "Son 180 gün"], [365, "Son 365 gün"]].map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === repDays ? " selected" : "") + ">" + esc(o[1]) + "</option>";
       }).join("") + "</select></label>" +
       '<button class="btn" id="r-print">🖨 Yazdır</button></div>' +
 
