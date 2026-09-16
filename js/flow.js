@@ -11,7 +11,7 @@ import { data, stepById, activeSteps, tractorById, tractorByChassis,
          saveDoc, setDocFull, updateEvent, log } from "./store.js";
 import { fb } from "./fb.js";
 import { myEmail, myName, can, canExact } from "./auth.js";
-import { minutesBetween, newId, normChassis } from "./util.js";
+import { workMinutes, newId, normChassis } from "./util.js";
 
 // Bir adımın "tamamlandı" sayılması için sonucun bunlardan biri olması gerekir.
 // Başka adıma yönlendirilerek kapanan kayıtlar (result="yonlendirildi")
@@ -44,7 +44,7 @@ export function pendingSteps(t) {
 
 export function minutesHere(t) {
   if (!t || !t.currentEnteredAt) return 0;
-  return minutesBetween(t.currentEnteredAt, new Date());
+  return workMinutes(t.currentEnteredAt, new Date());
 }
 
 export function isOverdue(t) {
@@ -160,8 +160,8 @@ export async function finishStep(tractorId, result, note) {
 
   const now = new Date().toISOString();
   const started = t.currentStartedAt || now;
-  const wait = minutesBetween(t.currentEnteredAt, started);
-  const work = minutesBetween(started, now);
+  const wait = workMinutes(t.currentEnteredAt, started);
+  const work = workMinutes(started, now);
 
   const stepMap = Object.assign({}, t.steps || {});
   stepMap[cur.code] = {
@@ -360,7 +360,7 @@ export async function completeDefect(defectId) {
   const now = new Date().toISOString();
   await saveDoc("defects", defectId, { status: "rework_tamam", reworkFinishedAt: now });
   await log("rework_tamamlandi", d.chassisNo,
-            Math.round(minutesBetween(d.reworkStartedAt, now)) + " dk");
+            Math.round(workMinutes(d.reworkStartedAt, now)) + " dk");
 }
 
 export async function approveDefect(defectId) {
