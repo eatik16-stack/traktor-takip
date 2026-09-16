@@ -441,9 +441,9 @@ export function stepUsage(s) {
 }
 
 // Adım silme. "Pasif" akıştan çıkarır ama geçmişi okunur bırakır; silme ise
-// tanımı büsbütün yok eder. Bu yüzden yalnızca HİÇ KULLANILMAMIŞ adım silinir:
-// bir traktörün geçmişinde ya da bir hata kaydında geçen adım silinirse o
-// kayıtlar "hangi istasyon?" sorusuna cevap veremez hâle gelir.
+// tanımı büsbütün yok eder. Kullanılmış bir adım silinirse o kayıtlar "hangi
+// istasyon?" sorusuna cevap veremez — bu yüzden önce taranır ve sonuç açıkça
+// söylenir; karar yöneticinin.
 // Sunucu tarafında config yazma zaten yalnızca yöneticide (firestore.rules).
 async function deleteStepFlow(s, onDone) {
   if (!s) return;
@@ -454,28 +454,33 @@ async function deleteStepFlow(s, onDone) {
   try { await ensureHistory(3650); } catch (e) { /* eski kayıtlar okunamadıysa aşağıdaki tarama yine de çalışır */ }
 
   const u = stepUsage(s);
+  let kullanim = "";
 
   if (u.total) {
     const parcalar = [];
     if (u.hatta) parcalar.push(u.hatta + " traktör şu anda bu adımda");
     if (u.gecmis) parcalar.push(u.gecmis + " traktörün geçmişinde var");
     if (u.hata) parcalar.push(u.hata + " hata kaydı bu istasyona yazılmış");
-    await confirmDialog(s.code + " silinemez",
-      "Bu adım kullanılmış: " + parcalar.join(", ") + ". Silinirse bu kayıtlar hangi " +
-      "istasyona ait olduğunu gösteremez. Akıştan çıkarmak için Düzenle → Durum → " +
-      "Pasif yapın; geçmiş olduğu gibi kalır.", "Anladım");
-    return;
+    kullanim = parcalar.join(", ");
+    // Silmek yine de mümkün — karar yöneticinin — ama sonucu açıkça söylenir
+    // ve ne kadar kayıt etkilendiği denetim kaydına yazılır.
+    if (!(await confirmDialog(s.code + " kullanılmış",
+      "Bu adım kullanılmış: " + kullanim + ". Silinirse o kayıtlar hangi istasyona " +
+      "ait olduğunu gösteremez ve raporda istasyon dağılımı eksik çıkar. Sadece " +
+      "akıştan çıkarmak istiyorsanız Düzenle → Durum → Pasif yeterlidir; geçmiş " +
+      "olduğu gibi kalır.", "Yine de sil", "btn-danger"))) return;
+  } else {
+    if (!(await confirmDialog("Adımı Sil — " + s.code,
+      '"' + s.name + '" adımı tanımlardan tamamen kaldırılacak. Bu adım hiç kullanılmamış, ' +
+      "bu yüzden hiçbir kayıt etkilenmiyor. Geri alınamaz.", "Sil", "btn-danger"))) return;
   }
-
-  if (!(await confirmDialog("Adımı Sil — " + s.code,
-    '"' + s.name + '" adımı tanımlardan tamamen kaldırılacak. Bu adım hiç kullanılmamış, ' +
-    "bu yüzden hiçbir kayıt etkilenmiyor. Geri alınamaz.", "Sil", "btn-danger"))) return;
 
   const items = data.steps.filter(function (x) { return x.id !== s.id; })
     .sort(function (a, b) { return a.seq - b.seq; });
   try {
     await setDocFull("config", "steps", { items: items });
-    await log("adim_silindi", s.code, s.name + " (sıra " + s.seq + ")");
+    await log("adim_silindi", s.code,
+              s.name + " (sıra " + s.seq + ")" + (kullanim ? " | kullanımda olmasına rağmen silindi: " + kullanim : ""));
     toast(s.code + " silindi.", "ok");
     if (onDone) onDone();
   } catch (e) { err(e); }
