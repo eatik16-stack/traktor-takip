@@ -51,8 +51,21 @@ await page.goto(`http://127.0.0.1:${port}/test/index.html`, { waitUntil: "load" 
 await page.waitForFunction("window.__DONE__ === true", null, { timeout: 60000 })
   .catch(() => { /* aşağıda rapor edilir */ });
 
-const results = await page.evaluate("window.__RESULTS__ || []");
-const out = await page.evaluate("document.getElementById('out').textContent");
+const browserResults = await page.evaluate("window.__RESULTS__ || []");
+
+// Barkod çözücü tarayıcıda CDN'den iner; testte node_modules'ten koşturulur.
+// Sonuçlar aynı listeye katılır ki tek sayı görelim.
+const { runBarcodeTests } = await import("./barcode.mjs");
+let barcodeResults = [];
+try { barcodeResults = runBarcodeTests(); }
+catch (e) { barcodeResults = [{ name: "Barkod testleri çöktü", ok: false, extra: String(e) }]; }
+
+const results = browserResults.concat(barcodeResults);
+const out = results
+  .map((r) => (r.ok ? "  OK   " : "  FAIL ") + r.name + (r.ok ? "" : "  -> " + r.extra))
+  .join("\n") +
+  "\n\n  BAŞARILI: " + results.filter((r) => r.ok).length +
+  "   BAŞARISIZ: " + results.filter((r) => !r.ok).length;
 
 console.log(out);
 if (errors.length) {

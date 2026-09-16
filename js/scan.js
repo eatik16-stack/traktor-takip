@@ -13,8 +13,23 @@
 
 const OCR_URL = "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js";
 
-export function barcodeSupported() {
+// Sayfa içi barkod çözücü. Yerleşik okuyucusu OLMAYAN telefonlarda
+// (iPhone'un tamamı, bazı Android sürümleri) devreye girer. İki adres:
+// biri kapalıysa öbürü denenir — fabrika ağı birini engelleyebilir.
+const ZXING_URLS = [
+  "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js",
+  "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"
+];
+
+// Cihazın YERLEŞİK okuyucusu var mı? (Android Chrome'da vardır; iPhone'da yok.)
+export function nativeBarcodeSupported() {
   return typeof window !== "undefined" && typeof window.BarcodeDetector === "function";
+}
+
+// Bu cihazda barkod okutulabilir mi? Kamera varsa evet: yerleşik okuyucu yoksa
+// okuyucu sayfaya indirilir. Yani "uygulama indirin" durumu yok.
+export function barcodeSupported() {
+  return cameraSupported();
 }
 
 export function cameraSupported() {
@@ -55,6 +70,100 @@ function stopCamera(stream) {
   stream.getTracks().forEach(function (tr) { try { tr.stop(); } catch (e) {} });
 }
 
+/* ---------------- barkod çözücü ---------------- */
+
+let zxLoading = null;
+
+function loadZxing() {
+  if (typeof window !== "undefined" && window.ZXing) return Promise.resolve(window.ZXing);
+  if (zxLoading) return zxLoading;
+  zxLoading = new Promise(function (resolve, reject) {
+    let i = 0;
+    const dene = function () {
+      if (i >= ZXING_URLS.length) {
+        zxLoading = null;
+        reject(new Error("barkod okuyucu indirilemedi (internet?)"));
+        return;
+      }
+      const sc = document.createElement("script");
+      sc.src = ZXING_URLS[i++];
+      sc.onload = function () { window.ZXing ? resolve(window.ZXing) : dene(); };
+      sc.onerror = function () { sc.remove(); dene(); };
+      document.head.appendChild(sc);
+    };
+    dene();
+  });
+  return zxLoading;
+}
+
+function zxHints(ZX) {
+  const m = new Map();
+  m.set(ZX.DecodeHintType.TRY_HARDER, true);
+  m.set(ZX.DecodeHintType.POSSIBLE_FORMATS, [
+    ZX.BarcodeFormat.CODE_128, ZX.BarcodeFormat.CODE_39, ZX.BarcodeFormat.CODE_93,
+    ZX.BarcodeFormat.ITF, ZX.BarcodeFormat.CODABAR, ZX.BarcodeFormat.EAN_13,
+    ZX.BarcodeFormat.EAN_8, ZX.BarcodeFormat.UPC_A, ZX.BarcodeFormat.QR_CODE,
+    ZX.BarcodeFormat.DATA_MATRIX, ZX.BarcodeFormat.PDF_417
+  ]);
+  return m;
+}
+
+// RGBA piksellerden gri tonlama. Saf işlev — testten doğrudan çağrılır.
+export function toLuminance(rgba, w, h) {
+  const lum = new Uint8ClampedArray(w * h);
+  for (let i = 0, p = 0; i < lum.length; i++, p += 4) {
+    lum[i] = (rgba[p] * 306 + rgba[p + 1] * 601 + rgba[p + 2] * 117) >> 10;
+  }
+  return lum;
+}
+
+// Gri tonlama veriden barkod metni. Bulunamazsa null (hata fırlatmaz).
+// Saf işlev: ZXing dışarıdan verilir, kamera veya DOM gerekmez — testte
+// üretilmiş bir barkod görüntüsüyle aynı yol koşturulur.
+export function decodeLuminance(ZX, lum, w, h) {
+  try {
+    const src = new ZX.RGBLuminanceSource(lum, w, h);
+    const bmp = new ZX.BinaryBitmap(new ZX.HybridBinarizer(src));
+    const reader = new ZX.MultiFormatReader();
+    reader.setHints(zxHints(ZX));
+    const res = reader.decode(bmp);
+    return res ? String(res.getText() || "").trim() || null : null;
+  } catch (e) { return null; }
+}
+
+// Okuyucuyu seçer: önce cihazın yerleşik okuyucusu (hiçbir şey inmez),
+// yoksa sayfa içi çözücü. Dönen nesnenin read(video) işlevi o karedeki
+// barkod metinlerini dizi olarak verir.
+async function makeDecoder(bilgi) {
+  if (nativeBarcodeSupported()) {
+    try {
+      // Bazı Android'lerde sınıf vardır ama hiçbir biçimi desteklemez.
+      const fmts = await window.BarcodeDetector.getSupportedFormats();
+      if (fmts && fmts.length) {
+        const d = new window.BarcodeDetector();
+        return {
+          kind: "native",
+          read: async function (video) {
+            const found = await d.detect(video);
+            return (found || []).map(function (b) { return String(b.rawValue || "").trim(); });
+          }
+        };
+      }
+    } catch (e) { /* yerleşik okuyucu kullanılamadı, sayfa içi çözücüye geç */ }
+  }
+  if (bilgi) bilgi("Okuyucu hazırlanıyor…");
+  const ZX = await loadZxing();
+  return {
+    kind: "zxing",
+    read: async function (video) {
+      const cv = grabFrame(video, 900);
+      const img = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height);
+      const txt = decodeLuminance(ZX, toLuminance(img.data, cv.width, cv.height), cv.width, cv.height);
+      return txt ? [txt] : [];
+    }
+  };
+}
+
 /* ---------------- barkod ---------------- */
 
 // Etikette birden fazla barkod var. Hangisinin ne olduğunu uzunluğundan ve
@@ -83,7 +192,7 @@ export function classifyCodes(values, known) {
 // Dönen değer: { chassis, saleCode, other[] } — vazgeçilirse null.
 export function scanLabel(known) {
   return new Promise(function (resolve) {
-    if (!barcodeSupported() || !cameraSupported()) { resolve(null); return; }
+    if (!cameraSupported()) { resolve(null); return; }
 
     const wrap = overlay("Etiketi okutun",
       "Etiketin barkodlarını çerçeveye getirin. Okunanlar aşağıda görünür.");
@@ -122,16 +231,28 @@ export function scanLabel(known) {
       if (c.chassis) grace = setTimeout(function () { finish(false); }, 2500);
     };
 
+    const bilgi = function (t) { if (!done) hint.textContent = t; };
+
+    // Önce kamera (izin isteği hemen çıksın), sonra okuyucu. Bu sırayla
+    // olması önemli: stream değişkeni dolmadan okuyucu indirilmeye başlarsa
+    // ve kişi bu sırada pencereyi kapatırsa kamera açık kalırdı.
     startCamera(video).then(function (s) {
       stream = s;
-      const detector = new window.BarcodeDetector();
+      if (done) { stopCamera(s); return null; }
+      return makeDecoder(bilgi);
+    }).then(function (decoder) {
+      if (!decoder || done) return;
+      // Sayfa içi çözücü kareyi kendi işler, biraz daha seyrek bakarız.
+      const aralik = decoder.kind === "native" ? 220 : 380;
+      let mesgul = false;
+      durum();
       timer = setInterval(async function () {
-        if (done || video.readyState < 2) return;
+        if (done || mesgul || video.readyState < 2) return;
+        mesgul = true;
         try {
-          const found = await detector.detect(video);
+          const found = await decoder.read(video);
           let yeni = false;
-          (found || []).forEach(function (b) {
-            const raw = String(b.rawValue || "").trim();
+          (found || []).forEach(function (raw) {
             if (raw && seen.indexOf(raw) === -1) { seen.push(raw); yeni = true; }
           });
           if (yeni) {
@@ -139,9 +260,11 @@ export function scanLabel(known) {
             durum();
           }
         } catch (e) { /* kare okunamadı, bir sonrakini dene */ }
-      }, 220);
+        finally { mesgul = false; }
+      }, aralik);
     }).catch(function (e) {
-      hint.textContent = "Kamera açılamadı: " + ((e && e.message) || "izin verilmedi") +
+      if (done) return;
+      hint.textContent = "Okuyucu açılamadı: " + ((e && e.message) || "izin verilmedi") +
         ". Bilgiyi elle yazabilirsiniz.";
       hint.className = "scan-hint scan-err";
     });
@@ -168,10 +291,14 @@ function loadOcr() {
   return ocrLoading;
 }
 
-function grabFrame(video) {
+// Videodan bir kare alır. enBoy verilirse görüntü küçültülür: sayfa içi
+// çözücü büyük karelerde yavaşlar, 900 piksel barkod için fazlasıyla yeter.
+function grabFrame(video, enBoy) {
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const k = enBoy && vw > enBoy ? enBoy / vw : 1;
   const cv = document.createElement("canvas");
-  cv.width = video.videoWidth || 1280;
-  cv.height = video.videoHeight || 720;
+  cv.width = Math.round(vw * k);
+  cv.height = Math.round(vh * k);
   cv.getContext("2d").drawImage(video, 0, 0, cv.width, cv.height);
   return cv;
 }
