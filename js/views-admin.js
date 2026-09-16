@@ -400,7 +400,8 @@ function drawSteps(body, rerender) {
     '<div class="card"><div class="card-head"><h3>Adımlar</h3>' +
       '<div class="spacer"></div><button class="btn btn-sm" id="s-add">+ Adım Ekle</button></div>' +
     '<p class="card-sub" style="margin-bottom:10px">Hedef süre 0 ise gecikme uyarısı çıkmaz. ' +
-      "Uygulama bir süre çalıştıktan sonra gerçek verilerden belirleyebilirsiniz.</p>" +
+      "Uygulama bir süre çalıştıktan sonra gerçek verilerden belirleyebilirsiniz. " +
+      "Sıra numaraları her değişiklikten sonra 1'den başlayarak yeniden düzenlenir.</p>" +
     '<div class="table-wrap"><table class="data"><thead><tr>' +
       "<th>#</th><th>Kod</th><th>Ad</th><th>Tür</th><th>Hedef</th><th>Hata girilir</th><th>Durum</th><th></th>" +
       "</tr></thead><tbody>" + steps.map(function (s) {
@@ -427,6 +428,16 @@ function drawSteps(body, rerender) {
       deleteStepFlow(steps.find(function (s) { return s.id === b.dataset.sdel; }), rerender);
     };
   });
+}
+
+// Sıra numaraları her değişiklikten sonra 1..N olarak sıkıştırılır. Bir adım
+// silinince "1, 2, 3, 5…" diye boşluklu kalması hem kafa karıştırır hem de
+// listeyi okunmaz yapar. Göreli sıra korunduğu için akış ve "atlanan adım"
+// kontrolü bundan etkilenmez.
+export function renumberSteps(items) {
+  return items.slice()
+    .sort(function (a, b) { return a.seq - b.seq; })
+    .map(function (s, i) { return Object.assign({}, s, { seq: i + 1 }); });
 }
 
 // Bir adım kullanılmış mı? Silinip silinemeyeceğini bu belirler.
@@ -475,8 +486,7 @@ async function deleteStepFlow(s, onDone) {
       "bu yüzden hiçbir kayıt etkilenmiyor. Geri alınamaz.", "Sil", "btn-danger"))) return;
   }
 
-  const items = data.steps.filter(function (x) { return x.id !== s.id; })
-    .sort(function (a, b) { return a.seq - b.seq; });
+  const items = renumberSteps(data.steps.filter(function (x) { return x.id !== s.id; }));
   try {
     await setDocFull("config", "steps", { items: items });
     await log("adim_silindi", s.code,
@@ -527,8 +537,7 @@ function stepDialog(s, onDone) {
           allowsDefect: $("#s-ad", body).value === "1",
           active: $("#s-act", body).value === "1"
         };
-        const items = data.steps.filter(function (x) { return x.id !== s.id; }).concat([rec])
-          .sort(function (a, b) { return a.seq - b.seq; });
+        const items = renumberSteps(data.steps.filter(function (x) { return x.id !== s.id; }).concat([rec]));
         try {
           await saveDoc("config", "steps", { items: items });
           await log(isNew ? "adim_olusturuldu" : "adim_guncellendi", code, name);
