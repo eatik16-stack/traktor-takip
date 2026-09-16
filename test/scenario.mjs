@@ -4,7 +4,7 @@
 // makinede aynı dosya tarayıcı konsolunda da çalıştırılabilir.
 
 export async function runScenario(ctx) {
-  const { flow, data, store, util, V, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
+  const { flow, data, store, util, V, scan, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
   const results = [];
   const check = function (name, cond, extra) {
     results.push({ name: name, ok: !!cond, extra: cond ? "" : String(extra == null ? "" : extra) });
@@ -589,6 +589,41 @@ export async function runScenario(ctx) {
         k30.plantReady >= k30.ready && k30.plantWip >= k30.wip, k30);
   check("Açık hata dönemin hatalarından sayılıyor",
         k30.defectsOpen <= k30.defectsTotal, k30);
+
+  /* ---------- 15. Etiket okuma ----------
+     Şasi ve satış kodu hata kaldırmayan iki alan. Kamera burada çalışmaz;
+     kameradan ÇIKAN değerleri ayıklayan saf işlevler sınanır. */
+  if (scan) {
+    const bilinen = ["GX626B", "GX721F1"];
+
+    const c1 = scan.classifyCodes(["*MEACBBBTAS4940949*", "GX721F1", "V02M1234"], bilinen);
+    check("Barkodlar arasından şasi seçiliyor", c1.chassis === "MEACBBBTAS4940949", c1.chassis);
+    check("Barkodlar arasından satış kodu seçiliyor", c1.saleCode === "GX721F1", c1.saleCode);
+    check("Tanınmayan barkod alanlara yazılmıyor",
+          c1.other.indexOf("V02M1234") !== -1, c1.other.join(","));
+
+    const c2 = scan.classifyCodes(["MEACBBBTAS4940949"], bilinen);
+    check("Satış kodu barkodu yoksa alan boş bırakılır",
+          c2.chassis === "MEACBBBTAS4940949" && c2.saleCode === null, c2.saleCode);
+
+    const c3 = scan.classifyCodes(["GX626B", "MEACBBBTAS4940949"], bilinen);
+    check("Barkodların okunma sırası önemli değil",
+          c3.chassis === "MEACBBBTAS4940949" && c3.saleCode === "GX626B", c3);
+
+    check("Ayraçlı barkod temizleniyor",
+          scan.classifyCodes(["*MEACBBBTAS4940949*"], []).chassis === "MEACBBBTAS4940949");
+
+    check("Fotoğraftan satış kodu kalıpla bulunur",
+          scan.extractSaleCode("MODEL GX721F1 SERIAL", bilinen) === "GX721F1");
+    check("Fotoğrafta harf karışırsa bilinen koda düzeltilir",
+          scan.extractSaleCode("MODEL GX72IF1 SERIAL", bilinen) === "GX721F1",
+          scan.extractSaleCode("MODEL GX72IF1 SERIAL", bilinen));
+    check("Satış kodu yoksa uydurulmaz",
+          scan.extractSaleCode("BURADA KOD YOK", []) === null,
+          scan.extractSaleCode("BURADA KOD YOK", []));
+    check("Fotoğraftan şasi 17 haneden bulunur",
+          scan.extractChassis("VIN *MEACBBBTAS4940949*") === "MEACBBBTAS4940949");
+  }
 
   return results;
 }
