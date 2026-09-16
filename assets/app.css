@@ -262,6 +262,8 @@ table.data tbody tr.clickable:active { background:var(--bg); }
   border-radius:50%; background:#fff; border:2px solid var(--line); }
 .tl-item.done::before    { background:var(--green); border-color:var(--green); }
 .tl-item.current::before { background:var(--blue);  border-color:var(--blue); }
+/* Geri gönderilen adım: tamamlanmış görünmemeli, yeniden yapılacak. */
+.tl-item.redo::before    { background:var(--amber); border-color:var(--amber); }
 .tl-title { font-weight:600; font-size:13.5px; }
 .tl-meta  { color:var(--muted); font-size:12px; }
 
