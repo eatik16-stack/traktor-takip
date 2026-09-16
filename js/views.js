@@ -971,7 +971,7 @@ function newTractorDialog(onDone, presetChassis) {
         '<small class="field-hint" id="n-ch-hint">' +
           (barcodeSupported() && cameraSupported()
             ? "Kamera simgesine basın ve etiketi okutun — barkodlu ne varsa alınır."
-            : "Bu cihazda barkod okuyucu yok — numarayı elle yazın.") + "</small></label>" +
+            : "Bu cihazda kamera kullanılamıyor — numarayı elle yazın.") + "</small></label>" +
       '<label class="field"><span>Satış Kodu</span>' +
         '<div class="with-btn">' +
           '<input class="input" id="n-sc" list="n-sc-list" autocomplete="off" autocapitalize="characters">' +
