@@ -7,6 +7,8 @@ import { data, stepById, stepByCode, activeSteps, tractorById, tractorByChassis,
          ensureHistory, RECENT_DAYS } from "./store.js";
 import { myStepCode, can, canExact, myEmail } from "./auth.js";
 import * as flow from "./flow.js";
+import { scanBarcode, scanText, barcodeSupported, cameraSupported,
+         extractChassis, extractSaleCode } from "./scan.js";
 
 export function go(hash) { location.hash = hash; }
 
@@ -122,17 +124,29 @@ export function sema(view) {
 
 let stQ = "";
 let stSel = null;
+let stStation = null;   // yönetici başka bir istasyona geçtiğinde
 
 export function istasyon(view, _p, rerender) {
-  const code = myStepCode();
+  const steps = activeSteps();
+  // Yönetim ve sistem yöneticisi istasyon değiştirebilir (vekalet, test).
+  // Operatör yalnızca kendi istasyonunu görür.
+  const digerleri = can(["yonetim"]);
+  if (stStation && !stepByCode(stStation)) stStation = null;
+  const code = (digerleri && stStation) || myStepCode();
   const step = code ? stepByCode(code) : null;
   if (!step) {
     view.innerHTML = '<div class="page-head"><div><h2>İstasyonum</h2></div></div>' +
       '<div class="banner">Hesabınıza varsayılan istasyon tanımlanmamış. ' +
-      "Yöneticiden Tanımlar → Kullanıcılar ekranından istasyon atamasını isteyin.</div>";
+      "Yöneticiden Tanımlar → Kullanıcılar ekranından istasyon atamasını isteyin.</div>" +
+      (digerleri ? '<div class="card"><label class="field" style="margin:0"><span>İstasyon seçin</span>' +
+        '<select class="input input-lg" id="st-pick"><option value="">—</option>' +
+        steps.map(function (x) {
+          return '<option value="' + esc(x.code) + '">' + esc(x.code + " — " + x.name) + "</option>";
+        }).join("") + "</select></label></div>" : "");
+    const pk0 = $("#st-pick", view);
+    if (pk0) pk0.onchange = function () { stStation = pk0.value || null; stSel = null; rerender(); };
     return;
   }
-  const steps = activeSteps();
   const isFirst = steps.length && steps[0].id === step.id;
   const q = stQ.trim();
 
@@ -176,8 +190,15 @@ export function istasyon(view, _p, rerender) {
 
   view.innerHTML =
     '<div class="page-head"><div><h2>' + esc(step.name) + "</h2>" +
-      "<p>" + esc(step.code) + " · kuyrukta " + queue.length + " traktör</p></div>" +
+      "<p>" + esc(step.code) + " · kuyrukta " + queue.length + " traktör" +
+        (digerleri && stStation ? " · kendi istasyonunuz değil" : "") + "</p></div>" +
       '<div class="spacer"></div>' +
+      (digerleri
+        ? '<label class="field" style="margin:0;min-width:190px"><span>İstasyon</span>' +
+          '<select class="input" id="st-pick">' + steps.map(function (x) {
+            return '<option value="' + esc(x.code) + '"' + (x.code === step.code ? " selected" : "") +
+                   ">" + esc(x.code + " — " + x.name) + "</option>";
+          }).join("") + "</select></label>" : "") +
       (isFirst && can(["operator", "kontrol", "onay"])
         ? '<button class="btn btn-primary" id="st-new">+ Traktör Ekle</button>' : "") + "</div>" +
     '<div class="card search-card">' +
@@ -219,6 +240,11 @@ export function istasyon(view, _p, rerender) {
   if (clr) clr.onclick = function () { stQ = ""; rerender(); };
   const nb = $("#st-new", view);
   if (nb) nb.onclick = function () { newTractorDialog(rerender, q); };
+  const pk = $("#st-pick", view);
+  if (pk) pk.onchange = function () {
+    stStation = pk.value === myStepCode() ? null : pk.value;
+    stSel = null; rerender();
+  };
 
   $$("[data-sel]", view).forEach(function (b) {
     b.onclick = function () { stSel = b.dataset.sel; rerender(); };
@@ -437,7 +463,11 @@ function reworkPanel(t, open, mine, extraButtons) {
            mineOne ? '<button class="btn btn-success btn-sm" data-dact="complete">✓ Bitti</button>' +
                      '<button class="btn btn-sm" data-dact="release" title="Başkası alabilsin diye geri bırak">Bırak</button>' :
            other ? '<span class="chip chip-amber">' + esc(d.reworkByName || "") + " yapıyor</span>" :
-           d.status === "rework_tamam" ? '<span class="chip chip-blue">Onay bekliyor</span>' :
+           d.status === "rework_tamam"
+             ? (can(["onay", "kontrol"])
+                 ? '<button class="btn btn-success btn-sm" data-dact="approve">✓ Onayla</button>' +
+                   '<button class="btn btn-danger btn-sm" data-dact="reject">✗ Reddet</button>'
+                 : '<span class="chip chip-blue">Onay bekliyor</span>') :
            d.status === "onaylandi" ? '<span class="chip chip-green">Tamam</span>' : defectChip(d.status)) +
         "</div></div>";
     }).join("") + "</div>" : emptyBox("Bu traktörde hata kaydı yok.", "✅")) +
@@ -662,8 +692,11 @@ export function openDefectDialog(tractorId, onDone) {
   if (!t) return;
   const srcs = data.lookups.hata_kaynagi || [];
   const orgs = data.lookups.olusum_yeri || [];
+  // İş yapılan istasyonlar: hata bunlardan birinde giderilir.
+  const isSteps = activeSteps().filter(function (x) {
+    return x.kind === "rework" || x.kind === "islem";
+  });
   const picker = descriptionPicker(null);
-
   const body = el('<div>' +
     '<div class="banner info" style="margin-top:0"><strong>' + esc(t.chassisNo) + "</strong>" +
       (t.saleCode ? " · " + esc(t.saleCode) : "") +
@@ -678,6 +711,14 @@ export function openDefectDialog(tractorId, onDone) {
         orgs.map(function (s) { return "<option>" + esc(s) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field"><span>Parça Kodu (varsa)</span><input class="input" id="d-pcode"></label>' +
       '<label class="field"><span>Parça Adı (varsa)</span><input class="input" id="d-pname"></label>' +
+      '<label class="field field-wide"><span>Nerede giderilecek?</span>' +
+        '<select class="input" id="d-assign"><option value="">Normal akış — sıradaki rework istasyonu</option>' +
+        isSteps.map(function (x) {
+          return '<option value="' + esc(x.id) + '">' + esc(x.code + " — " + x.name) + "</option>";
+        }).join("") + "</select>" +
+        '<small class="field-hint">Belirli bir istasyon seçerseniz traktör oraya iş emri olarak düşer ' +
+        've iş bitince buraya geri döner. Sevke hazır bekleyen traktörde çıkan boya/pas ' +
+        "hataları için bunu kullanın.</small></label>" +
     "</div></div>");
   $("#p-slot", body).appendChild(picker.el);
 
@@ -701,7 +742,8 @@ export function openDefectDialog(tractorId, onDone) {
           await flow.addDefect(tractorId, {
             category: cat, description: desc, detectedStepId: t.currentStepId,
             source: src, originLocation: $("#d-org", body).value || null,
-            partCode: $("#d-pcode", body).value, partName: $("#d-pname", body).value
+            partCode: $("#d-pcode", body).value, partName: $("#d-pname", body).value,
+            assignStepId: $("#d-assign", body).value || null
           });
           const yeni = picker.isNew();
           await catalogRemember(desc, cat, src);
@@ -905,17 +947,93 @@ export function traktorler(view, _p, rerender) {
 }
 
 function newTractorDialog(onDone, presetChassis) {
-  const families = data.lookups.aile || [];
-  const body = el('<div class="form-grid">' +
-    '<label class="field"><span>Şasi No *</span><input class="input input-lg" id="n-ch" autocomplete="off" autocapitalize="characters" value="' + esc(presetChassis || "") + '"></label>' +
-    '<label class="field"><span>Satış Kodu</span><input class="input" id="n-sc"></label>' +
-    '<label class="field"><span>Aile</span><select class="input" id="n-fam"><option value="">—</option>' +
-      families.map(function (f) { return "<option>" + esc(f) + "</option>"; }).join("") + "</select></label>" +
-    '<label class="field"><span>Motor No</span><input class="input" id="n-en"></label>' +
-    '<label class="field"><span>Kabin Anahtar No</span><input class="input" id="n-ck"></label>' +
-    '<label class="field"><span>Trafik</span><select class="input" id="n-tr">' +
-      '<option value="">—</option><option>LH</option><option>RH</option></select></label>' +
-  "</div>");
+  // Şasi ve satış kodu kritik: yanlış yazılırsa traktörün bütün geçmişi
+  // yanlış kayda işlenir. Bu yüzden ikisi de elle yazılmak zorunda değil —
+  // şasi barkoddan birebir gelir, satış kodu etiket fotoğrafından okunur ve
+  // daha önce kullanılmış kodlarla karşılaştırılır. İkisi de düzenlenebilir.
+  const bilinenKodlar = [];
+  data.tractors.forEach(function (t) {
+    const c = String(t.saleCode || "").trim().toUpperCase();
+    if (c && bilinenKodlar.indexOf(c) === -1) bilinenKodlar.push(c);
+  });
+  bilinenKodlar.sort();
+
+  const body = el('<div>' +
+    '<div class="form-grid">' +
+      '<label class="field field-wide"><span>Şasi No *</span>' +
+        '<div class="with-btn">' +
+          '<input class="input input-lg" id="n-ch" autocomplete="off" autocapitalize="characters" ' +
+            'inputmode="latin" value="' + esc(presetChassis || "") + '">' +
+          (barcodeSupported() && cameraSupported()
+            ? '<button type="button" class="btn btn-primary" id="n-scan" title="Etiketteki barkodu okut">📷</button>' : "") +
+        "</div>" +
+        '<small class="field-hint" id="n-ch-hint">' +
+          (barcodeSupported() && cameraSupported()
+            ? "Kamera simgesine basıp etiketteki barkodu okutun."
+            : "Bu cihazda barkod okuyucu yok — numarayı elle yazın.") + "</small></label>" +
+      '<label class="field"><span>Satış Kodu</span>' +
+        '<div class="with-btn">' +
+          '<input class="input" id="n-sc" list="n-sc-list" autocomplete="off" autocapitalize="characters">' +
+          (cameraSupported()
+            ? '<button type="button" class="btn" id="n-ocr" title="Etiketi fotoğraflayıp oku">📷</button>' : "") +
+        "</div>" +
+        '<datalist id="n-sc-list">' + bilinenKodlar.map(function (c) {
+          return '<option value="' + esc(c) + '">';
+        }).join("") + "</datalist>" +
+        '<small class="field-hint" id="n-sc-hint">Fotoğraftan okunursa kontrol edip onaylayın.</small></label>' +
+      '<label class="field"><span>Kabin Anahtar No</span><input class="input" id="n-ck" autocomplete="off"></label>' +
+    "</div></div>");
+
+  const chIn = $("#n-ch", body), scIn = $("#n-sc", body);
+  const chHint = $("#n-ch-hint", body), scHint = $("#n-sc-hint", body);
+
+  const scanBtn = $("#n-scan", body);
+  if (scanBtn) scanBtn.onclick = async function () {
+    scanBtn.disabled = true;
+    try {
+      const raw = await scanBarcode();
+      if (raw) {
+        const ch = extractChassis(raw) || normChassis(raw);
+        chIn.value = ch;
+        chHint.textContent = "Barkoddan okundu: " + ch;
+        chHint.className = "field-hint hint-ok";
+        if (!scIn.value && cameraSupported()) scIn.focus();
+      }
+    } catch (e) { err(e); } finally { scanBtn.disabled = false; }
+  };
+
+  const ocrBtn = $("#n-ocr", body);
+  if (ocrBtn) ocrBtn.onclick = async function () {
+    ocrBtn.disabled = true;
+    scHint.className = "field-hint";
+    try {
+      const text = await scanText();
+      if (text != null) {
+        const kod = extractSaleCode(text, bilinenKodlar);
+        if (kod) {
+          scIn.value = kod;
+          const tanidik = bilinenKodlar.indexOf(kod) !== -1;
+          scHint.textContent = tanidik
+            ? "Okundu ve daha önce kullanılmış bir kodla eşleşti: " + kod + ". Yine de kontrol edin."
+            : "Okundu: " + kod + " — daha önce kullanılmamış bir kod, etiketle karşılaştırın.";
+          scHint.className = "field-hint " + (tanidik ? "hint-ok" : "");
+        } else {
+          scHint.textContent = "Fotoğraftan satış kodu seçilemedi, elle yazın.";
+          scHint.className = "field-hint hint-err";
+        }
+        // Etikette şasi de yazıyor; alan boşsa oradan doldur.
+        if (!normChassis(chIn.value)) {
+          const ch = extractChassis(text);
+          if (ch && ch.length >= 10) {
+            chIn.value = ch;
+            chHint.textContent = "Fotoğraftan okundu: " + ch + " — barkodla doğrulayın.";
+            chHint.className = "field-hint";
+          }
+        }
+      }
+    } catch (e) { err(e); } finally { ocrBtn.disabled = false; }
+  };
+
   modal({
     title: "Yeni Traktör", body: body,
     buttons: [{ label: "Vazgeç" }, {
@@ -923,7 +1041,7 @@ function newTractorDialog(onDone, presetChassis) {
       onClick: async function () {
         // Aynı sonla biten bir traktör zaten hattaysa büyük ihtimalle aynı
         // traktör: operatör 6 haneyi, öbürü tamamını yazmış olabilir.
-        const ch = normChassis($("#n-ch", body).value);
+        const ch = normChassis(chIn.value);
         const benzer = findTractors(ch.length > 6 ? ch.slice(-6) : ch, 3).filter(function (t) {
           return t.chassisNo !== ch && t.status !== "sevk_edildi";
         });
@@ -936,12 +1054,9 @@ function newTractorDialog(onDone, presetChassis) {
         }
         try {
           const id = await flow.createTractor({
-            chassisNo: $("#n-ch", body).value,
-            saleCode: $("#n-sc", body).value,
-            family: $("#n-fam", body).value || null,
-            engineNo: $("#n-en", body).value,
-            cabinKeyNo: $("#n-ck", body).value,
-            traffic: $("#n-tr", body).value || null
+            chassisNo: chIn.value,
+            saleCode: scIn.value,
+            cabinKeyNo: $("#n-ck", body).value
           });
           toast("Traktör eklendi.", "ok");
           if (onDone) onDone();
@@ -1002,8 +1117,15 @@ export async function traktor(view, params, rerender) {
             ? '<button class="btn" id="act-release">▶ Beklemeden Çıkar</button>'
             : '<button class="btn btn-warn" id="act-hold">⏸ Beklemeye Al</button>') +
         "</div></div>"
-      : t.status === "sevke_hazir" && can(["onay"])
-        ? '<div class="card"><div class="btn-row"><button class="btn btn-primary" id="act-dispatch">🚚 Sevk Edildi</button></div></div>'
+      : t.status === "sevke_hazir"
+        ? '<div class="card"><div class="card-head"><h3>Sevke Hazır</h3></div>' +
+          '<p class="card-sub" style="margin-bottom:10px">Bahçede beklerken boya, pas gibi bir kusur ' +
+            "çıkarsa buradan hata açın; traktör seçtiğiniz istasyona iş emri olarak düşer ve iş " +
+            "bitince yine sevke hazır duruma döner.</p>" +
+          '<div class="btn-row">' +
+            (can(["kontrol", "onay"]) ? '<button class="btn btn-danger" id="add-def">⚠ Hata Ekle</button>' : "") +
+            (can(["onay"]) ? '<button class="btn btn-primary" id="act-dispatch">🚚 Sevk Edildi</button>' : "") +
+          "</div></div>"
         : "") +
 
     (pending.length ? '<div class="card"><div class="card-head"><h3>Onay İçin Bekleyen Adımlar</h3></div>' +
@@ -1015,6 +1137,9 @@ export async function traktor(view, params, rerender) {
       steps.map(function (s) {
         const rec = (t.steps || {})[s.code];
         const wasDone = !!rec && flow.COMPLETED_RESULTS.indexOf(rec.result) !== -1;
+        // Hatası olmayan rework istasyonu atlanır; çizelgede "bekliyor" gibi
+        // durmasın, neden uğranmadığı yazsın.
+        const atlandi = !!rec && rec.result === flow.SKIPPED;
         // Traktör ŞU AN bu adımdaysa, daha önce tamamlanmış olsa bile yeniden
         // yapılacak demektir. Yeşil göstermek "burada işim bitti" anlamına
         // gelirdi; geri gönderilen adım turuncu, ilk kez gelinen adım mavi.
@@ -1022,7 +1147,7 @@ export async function traktor(view, params, rerender) {
                       (t.status === "devam" || t.status === "beklemede");
         const redo = isCur && wasDone;
         const done = wasDone && !isCur;
-        return '<div class="tl-item ' + (done ? "done" : "") +
+        return '<div class="tl-item ' + (done ? "done" : "") + (atlandi ? " skipped" : "") +
           (isCur ? (redo ? " redo" : " current") : "") + '">' +
           '<div class="tl-title">' + s.seq + ". " + esc(s.name) +
             ' <span style="color:var(--muted);font-weight:500">' + esc(s.code) + "</span>" +
@@ -1034,6 +1159,7 @@ export async function traktor(view, params, rerender) {
                             ';font-weight:600">Şu an burada — ' + fmtMin(flow.minutesHere(t)) + "</span>" +
                             (redo ? "<br>önceki tamamlanma: " + fmtDate(rec.finishedAt) +
                                     " · " + esc(rec.operatorName || "—") : "")
+                  : atlandi ? "Atlandı — bu traktörde giderilecek hata yoktu"
                           : "Bekliyor") +
           "</div></div>";
       }).join("") + "</div></div>" +
