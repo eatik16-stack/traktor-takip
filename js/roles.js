@@ -21,15 +21,21 @@ export const ROLES = {
 export const DEFAULT_ROLES = ["operator"];
 
 // Hangi rol hangi ekranı görür. "admin" her ekranı görür.
+//
+// Sahadaki kural: 8 istasyonda çalışan 8 kişi YALNIZCA kendi istasyonunu
+// görür. İş emri geldiğinde İstasyonum ekranına düşer; işi başlatmak,
+// hata açmak, rework'ü kapatmak ve onaylamak o tek ekrandan yapılır.
+// Listeler, raporlar ve kuyruk ekranları yönetimde kalır — operatörün
+// ekranını kalabalıklaştırmaz ve yanlış traktöre dokunma ihtimalini keser.
 export const VIEWS = {
-  sema:       ["yonetim", "kontrol", "rework", "onay", "operator"],
+  sema:       ["yonetim"],
   istasyon:   ["kontrol", "rework", "onay", "operator"],
-  rework:     ["rework", "kontrol"],
-  onay:       ["onay", "kontrol"],
-  traktorler: ["yonetim", "kontrol", "rework", "onay", "operator"],
-  hatalar:    ["yonetim", "kontrol", "rework", "onay", "operator"],
+  rework:     ["yonetim"],
+  onay:       ["yonetim"],
+  traktorler: ["yonetim"],
+  hatalar:    ["yonetim"],
   rapor:      ["yonetim"],
-  onaysiz:    ["yonetim", "kontrol", "onay"],
+  onaysiz:    ["yonetim"],
   talepler:   [],          // yalnızca admin
   tanimlar:   []           // yalnızca admin
 };
