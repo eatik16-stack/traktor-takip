@@ -615,9 +615,9 @@ export function seedScreen(view, _p, rerender) {
       '<p class="card-sub" style="margin:10px 0 16px">Uygulama boş. Aşağıdaki düğme 11 adımı, ' +
         "saha yerleşimini, Excel'deki geçmiş kayıtlardan çıkarılan " + SEED_CATALOG.length +
         " hazır hata tanımını ve seçim listelerini yükler. " +
-        "Traktör ve hata <strong>kayıtları</strong> taşınmaz — sistem temiz başlar.</p>' +
-      '<button class="btn btn-primary btn-lg btn-block" id="seed-go">Başlangıç verilerini yükle</button>' +
-    "</div>";
+        "Traktör ve hata <strong>kayıtları</strong> taşınmaz — sistem temiz başlar.</p>" +
+    "</div>" +
+      '<button class="btn btn-primary btn-lg btn-block" id="seed-go">Başlangıç verilerini yükle</button>';
   $("#seed-go", view).onclick = async function (e) {
     e.target.disabled = true;
     try { await seedAll(); toast("Tanımlar yüklendi.", "ok"); rerender(); }
