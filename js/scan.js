@@ -57,27 +57,70 @@ function stopCamera(stream) {
 
 /* ---------------- barkod ---------------- */
 
-// Etiketteki barkodu okur, içindeki metni döndürür. Vazgeçilirse null.
-export function scanBarcode() {
+// Etikette birden fazla barkod var. Hangisinin ne olduğunu uzunluğundan ve
+// kalıbından anlarız: 17 hane VIN kalıbı şasidir, "GX721F1" biçimindeki kısa
+// kod satış kodudur. Geri kalanlar (V02M…, V05S… gibi) şimdilik kullanılmıyor
+// ama saklanır — ileride bir alan gerekirse ne olduklarını görebilelim diye.
+//
+// Bu işlev saf: kamera kullanmaz, testten doğrudan çağrılır.
+export function classifyCodes(values, known) {
+  const out = { chassis: null, saleCode: null, other: [] };
+  const bilinen = (known || []).map(function (k) { return String(k).toUpperCase(); });
+  (values || []).forEach(function (v) {
+    const t = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!t) return;
+    if (!out.chassis && /^[A-HJ-NPR-Z0-9]{17}$/.test(t)) { out.chassis = t; return; }
+    if (!out.saleCode && /^[A-Z]{2}[0-9]{3}[A-Z][0-9]{0,2}$/.test(t)) { out.saleCode = t; return; }
+    if (!out.saleCode && bilinen.indexOf(t) !== -1) { out.saleCode = t; return; }
+    if (out.other.indexOf(t) === -1) out.other.push(t);
+  });
+  return out;
+}
+
+// Etiketteki BÜTÜN barkodları okur. Şasiyi bulunca hemen kapatmaz: satış kodu
+// da barkodlu olabilir, birkaç saniye daha bakar. Satış kodu barkoddan gelirse
+// OCR'a hiç gerek kalmaz — okuma birebirdir.
+// Dönen değer: { chassis, saleCode, other[] } — vazgeçilirse null.
+export function scanLabel(known) {
   return new Promise(function (resolve) {
     if (!barcodeSupported() || !cameraSupported()) { resolve(null); return; }
 
-    const wrap = overlay("Barkodu okutun",
-      "Etiketin üzerindeki barkodu çerçeveye getirin — okunduğunda kendiliğinden kapanır.");
+    const wrap = overlay("Etiketi okutun",
+      "Etiketin barkodlarını çerçeveye getirin. Okunanlar aşağıda görünür.");
     const video = wrap.querySelector("video");
     const hint = wrap.querySelector(".scan-hint");
-    let stream = null, timer = null, done = false;
+    const foot = wrap.querySelector(".scan-foot");
+    foot.innerHTML = '<button class="btn btn-block" id="scan-done">Bitir</button>';
 
-    const finish = function (value) {
+    let stream = null, timer = null, grace = null, done = false;
+    const seen = [];
+
+    const finish = function (iptal) {
       if (done) return;
       done = true;
       if (timer) clearInterval(timer);
+      if (grace) clearTimeout(grace);
       stopCamera(stream);
       wrap.remove();
-      resolve(value);
+      resolve(iptal ? null : classifyCodes(seen, known));
     };
-    wrap.querySelector(".scan-x").onclick = function () { finish(null); };
-    wrap.onclick = function (e) { if (e.target === wrap) finish(null); };
+    wrap.querySelector(".scan-x").onclick = function () { finish(true); };
+    wrap.onclick = function (e) { if (e.target === wrap) finish(true); };
+    foot.querySelector("#scan-done").onclick = function () { finish(seen.length === 0); };
+
+    const durum = function () {
+      const c = classifyCodes(seen, known);
+      const satir = [];
+      satir.push(c.chassis ? "Şasi: " + c.chassis : "Şasi bekleniyor…");
+      if (c.saleCode) satir.push("Satış kodu: " + c.saleCode);
+      hint.textContent = satir.join("  ·  ");
+      hint.className = "scan-hint" + (c.chassis ? " hint-ok" : "");
+      // Şasi geldiyse satış kodu barkodu için kısa bir süre daha bak; yeni bir
+      // barkod göründükçe bu süre yeniden başlar.
+      if (grace) clearTimeout(grace);
+      if (c.chassis && c.saleCode) { finish(false); return; }
+      if (c.chassis) grace = setTimeout(function () { finish(false); }, 2500);
+    };
 
     startCamera(video).then(function (s) {
       stream = s;
@@ -86,12 +129,14 @@ export function scanBarcode() {
         if (done || video.readyState < 2) return;
         try {
           const found = await detector.detect(video);
-          if (found && found.length) {
-            const raw = String(found[0].rawValue || "").trim();
-            if (raw) {
-              if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
-              finish(raw);
-            }
+          let yeni = false;
+          (found || []).forEach(function (b) {
+            const raw = String(b.rawValue || "").trim();
+            if (raw && seen.indexOf(raw) === -1) { seen.push(raw); yeni = true; }
+          });
+          if (yeni) {
+            if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
+            durum();
           }
         } catch (e) { /* kare okunamadı, bir sonrakini dene */ }
       }, 220);
