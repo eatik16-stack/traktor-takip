@@ -6,7 +6,7 @@ import { data, activeSteps, stepByCode, saveDoc, setDocFull, removeDoc,
          grantAccess, revokeAccess, decideRequest, readLog, log,
          ensureHistory, RECENT_DAYS } from "./store.js";
 import { ROLES, roleLabels } from "./roles.js";
-import { myEmail } from "./auth.js";
+import { myEmail, isAdmin } from "./auth.js";
 import { STEPS as SEED_STEPS, LOOKUPS as SEED_LOOKUPS, CATALOG_ITEMS as SEED_CATALOG,
          PEOPLE as SEED_PEOPLE, KIND_COLOR, KIND_LABEL } from "./seed.js";
 import * as flow from "./flow.js";
@@ -412,7 +412,8 @@ function drawSteps(body, rerender) {
           "<td>" + (s.allowsDefect ? "✓" : "—") + "</td>" +
           "<td>" + (s.active === false ? '<span class="chip chip-slate">Pasif</span>'
                                        : '<span class="chip chip-green">Aktif</span>') + "</td>" +
-          '<td><div class="btn-row"><button class="btn btn-sm" data-s="' + esc(s.id) + '">Düzenle</button></div></td></tr>';
+          '<td><div class="btn-row"><button class="btn btn-sm" data-s="' + esc(s.id) + '">Düzenle</button>' +
+            '<button class="btn btn-danger btn-sm" data-sdel="' + esc(s.id) + '">Sil</button></div></td></tr>';
       }).join("") + "</tbody></table></div></div>";
 
   $("#s-add", body).onclick = function () { stepDialog(null, rerender); };
@@ -421,6 +422,63 @@ function drawSteps(body, rerender) {
       stepDialog(steps.find(function (s) { return s.id === b.dataset.s; }), rerender);
     };
   });
+  $$("[data-sdel]", body).forEach(function (b) {
+    b.onclick = function () {
+      deleteStepFlow(steps.find(function (s) { return s.id === b.dataset.sdel; }), rerender);
+    };
+  });
+}
+
+// Bir adım kullanılmış mı? Silinip silinemeyeceğini bu belirler.
+export function stepUsage(s) {
+  if (!s) return { hatta: 0, gecmis: 0, hata: 0, total: 0 };
+  const hatta = data.tractors.filter(function (t) { return t.currentStepId === s.id; }).length;
+  const gecmis = data.tractors.filter(function (t) { return t.steps && t.steps[s.code]; }).length;
+  const hata = data.defects.filter(function (d) {
+    return d.detectedStepId === s.id || d.detectedStepCode === s.code;
+  }).length;
+  return { hatta: hatta, gecmis: gecmis, hata: hata, total: hatta + gecmis + hata };
+}
+
+// Adım silme. "Pasif" akıştan çıkarır ama geçmişi okunur bırakır; silme ise
+// tanımı büsbütün yok eder. Bu yüzden yalnızca HİÇ KULLANILMAMIŞ adım silinir:
+// bir traktörün geçmişinde ya da bir hata kaydında geçen adım silinirse o
+// kayıtlar "hangi istasyon?" sorusuna cevap veremez hâle gelir.
+// Sunucu tarafında config yazma zaten yalnızca yöneticide (firestore.rules).
+async function deleteStepFlow(s, onDone) {
+  if (!s) return;
+  if (!isAdmin()) { toast("Adım silme yetkisi yalnızca sistem yöneticisinde.", "err"); return; }
+
+  // Kullanım taraması geçmişin TAMAMINDA yapılır; ekranda yalnızca son
+  // aylar yüklü olabilir.
+  try { await ensureHistory(3650); } catch (e) { /* eski kayıtlar okunamadıysa aşağıdaki tarama yine de çalışır */ }
+
+  const u = stepUsage(s);
+
+  if (u.total) {
+    const parcalar = [];
+    if (u.hatta) parcalar.push(u.hatta + " traktör şu anda bu adımda");
+    if (u.gecmis) parcalar.push(u.gecmis + " traktörün geçmişinde var");
+    if (u.hata) parcalar.push(u.hata + " hata kaydı bu istasyona yazılmış");
+    await confirmDialog(s.code + " silinemez",
+      "Bu adım kullanılmış: " + parcalar.join(", ") + ". Silinirse bu kayıtlar hangi " +
+      "istasyona ait olduğunu gösteremez. Akıştan çıkarmak için Düzenle → Durum → " +
+      "Pasif yapın; geçmiş olduğu gibi kalır.", "Anladım");
+    return;
+  }
+
+  if (!(await confirmDialog("Adımı Sil — " + s.code,
+    '"' + s.name + '" adımı tanımlardan tamamen kaldırılacak. Bu adım hiç kullanılmamış, ' +
+    "bu yüzden hiçbir kayıt etkilenmiyor. Geri alınamaz.", "Sil", "btn-danger"))) return;
+
+  const items = data.steps.filter(function (x) { return x.id !== s.id; })
+    .sort(function (a, b) { return a.seq - b.seq; });
+  try {
+    await setDocFull("config", "steps", { items: items });
+    await log("adim_silindi", s.code, s.name + " (sıra " + s.seq + ")");
+    toast(s.code + " silindi.", "ok");
+    if (onDone) onDone();
+  } catch (e) { err(e); }
 }
 
 function stepDialog(s, onDone) {
@@ -557,7 +615,7 @@ export function seedScreen(view, _p, rerender) {
       '<p class="card-sub" style="margin:10px 0 16px">Uygulama boş. Aşağıdaki düğme 11 adımı, ' +
         "saha yerleşimini, Excel'deki geçmiş kayıtlardan çıkarılan " + SEED_CATALOG.length +
         " hazır hata tanımını ve seçim listelerini yükler. " +
-        "Traktör ve hata <strong>kayıtları</strong> taşınmaz — sistem temiz başlar.</p>" +
+        "Traktör ve hata <strong>kayıtları</strong> taşınmaz — sistem temiz başlar.</p>' +
       '<button class="btn btn-primary btn-lg btn-block" id="seed-go">Başlangıç verilerini yükle</button>' +
     "</div>";
   $("#seed-go", view).onclick = async function (e) {
