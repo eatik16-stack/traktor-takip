@@ -697,6 +697,7 @@ export function openDefectDialog(tractorId, onDone) {
     return x.kind === "rework" || x.kind === "islem";
   });
   const picker = descriptionPicker(null);
+
   const body = el('<div>' +
     '<div class="banner info" style="margin-top:0"><strong>' + esc(t.chassisNo) + "</strong>" +
       (t.saleCode ? " · " + esc(t.saleCode) : "") +
