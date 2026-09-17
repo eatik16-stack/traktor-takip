@@ -17,7 +17,7 @@
 
 import { fb } from "./fb.js";
 import { myEmail, myName } from "./auth.js";
-import { toDate, newId, fold, matchesAll } from "./util.js";
+import { toDate, newId, fold, matchesAll, buzz } from "./util.js";
 
 /* ---------------- canlı durum ---------------- */
 
@@ -236,6 +236,14 @@ export async function catalogRemember(desc, category, source) {
 // Salt ekleme. Kurallar "by" alanının giriş yapan kişi, "at" alanının sunucu
 // saati olmasını şart koşar; geçmiş sonradan değiştirilemez.
 export async function log(action, target, detail) {
+  // Her durum değişimi buradan geçer, o yüzden dokunsal onay da burada verilir:
+  // tek yer, unutulan bir akış kalmaz. Traktörün hattı bitirmesi ve sevki
+  // ayrı bir desenle titrer — bunlar günde bir kez olan, kaçırılmaması
+  // gereken anlar.
+  const buyukAn = action === "sevk_edildi" ||
+                  String(detail || "").indexOf("sevke hazır") !== -1;
+  buzz(buyukAn ? [40, 60, 40] : 30);
+
   const f = await fb();
   try {
     await f.setDoc(f.doc(f.db, "log", newId("log")), {

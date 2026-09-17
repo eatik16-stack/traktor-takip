@@ -4,7 +4,16 @@ import { $, esc, el, fmtNum } from "./util.js";
 
 /* ---------------- pencere ---------------- */
 
+// Yarım kalan pencere içerikleri. Sayfa yenilenince silinir; kalıcı olması
+// istenmiyor — amaç ıskalanan bir dokunuşu kurtarmak, eski bir kaydı
+// günler sonra diriltmek değil.
+const TASLAKLAR = {};
+
 // buttons: [{label, cls, onClick}] — onClick "keep" döndürürse pencere kapanmaz.
+//
+// opts.dirty: () => bool — doluysa perdeye dokunmak ya da Escape pencereyi
+// KAPATMAZ, önce sorar. Eldivenle, tek elle çalışan biri için hedefi ıskalayan
+// bir dokunuş olağan bir olay; yarım kalmış hata kaydı öyle kaybolmamalı.
 export function modal(opts) {
   const host = $("#modal-host");
   const back = el('<div class="modal-back"><div class="modal">' +
@@ -29,12 +38,91 @@ export function modal(opts) {
     foot.appendChild(btn);
   });
 
-  function close() { back.remove(); }
-  $(".modal-close", back).onclick = close;
-  back.addEventListener("click", function (e) { if (e.target === back) close(); });
+  // Pencerenin doldurulmuş hâlini tek bir metne çevirir. Hem "yazdı mı?"
+  // sorusunu hem de taslağı saklamayı bu yürütür; böylece her pencere için
+  // ayrı ayrı kod yazmak gerekmez.
+  function anlikDurum() {
+    const alanlar = Array.prototype.map.call(
+      body.querySelectorAll("input, select, textarea"),
+      function (f) {
+        return (f.type === "checkbox" || f.type === "radio") ? (f.checked ? "1" : "") : f.value;
+      });
+    // Kategori gibi düğmeyle seçilen alanlar form alanı değil; seçili
+    // olanların işaretini de duruma katarız.
+    const secimler = Array.prototype.map.call(
+      body.querySelectorAll(".pick"),
+      function (p) { return p.classList.contains("selected") ? "1" : "0"; });
+    return alanlar.join("") + "" + secimler.join("");
+  }
+  function durumuUygula(kayit) {
+    const p = String(kayit).split("");
+    const alanlar = p[0].split("");
+    const hedef = body.querySelectorAll("input, select, textarea");
+    if (alanlar.length !== hedef.length) return false;
+    for (let i = 0; i < hedef.length; i++) {
+      const f = hedef[i];
+      if (f.type === "checkbox" || f.type === "radio") f.checked = alanlar[i] === "1";
+      else f.value = alanlar[i];
+      f.dispatchEvent(new Event("input", { bubbles: true }));
+      f.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return true;
+  }
+
+  function close() {
+    document.removeEventListener("keydown", onKey, true);
+    back.remove();
+  }
+  // Kapatma isteği: kayıt yarım kaldıysa önce sorar.
+  let soruluyor = false;
+  async function tryClose() {
+    if (soruluyor) return;
+    const kirli = opts.dirty ? opts.dirty() : anlikDurum() !== baslangic;
+    if (kirli) {
+      soruluyor = true;
+      const bitsin = await confirmDialog("Yarım kalan kayıt",
+        opts.draftKey
+          ? "Bu pencerede yazdıklarınız kaydedilmedi. Kapatırsanız saklanır, " +
+            "pencereyi tekrar açtığınızda geri gelir."
+          : "Bu pencerede yazdıklarınız kaydedilmedi. Kapatırsanız kaybolur.",
+        "Kapat");
+      soruluyor = false;
+      if (!bitsin) return;
+      if (opts.draftKey) TASLAKLAR[opts.draftKey] = anlikDurum();
+    } else if (opts.draftKey) {
+      delete TASLAKLAR[opts.draftKey];
+    }
+    close();
+  }
+  function onKey(e) {
+    if (e.key !== "Escape") return;
+    // En üstteki pencere kapanır; alttakiler açık kalır.
+    if (back !== host.lastElementChild) return;
+    e.stopPropagation();
+    tryClose();
+  }
+  $(".modal-close", back).onclick = tryClose;
+  back.addEventListener("click", function (e) { if (e.target === back) tryClose(); });
+  document.addEventListener("keydown", onKey, true);
   host.appendChild(back);
+
+  let baslangic = anlikDurum();
+  // Yarım kalmış kayıt varsa geri yükle ve söyle — sessizce doldurmak,
+  // kişinin yazdığını sandığı şeyle karşılaştığı bir tuzak olur.
+  if (opts.draftKey && TASLAKLAR[opts.draftKey]) {
+    if (durumuUygula(TASLAKLAR[opts.draftKey])) {
+      delete TASLAKLAR[opts.draftKey];
+      const not = el('<p class="field-hint hint-ok" style="margin:0 0 10px">' +
+        "Yarım kalan kayıt geri yüklendi.</p>");
+      body.insertBefore(not, body.firstChild);
+      baslangic = "";   // geri yüklenen içerik "dolu" sayılır
+    }
+  }
+
+  // Odak her genişlikte ilk alana gider. Telefonda da: odaklanmamış bir pencere
+  // ekran okuyucuda ve klavyeli tablette kayıp bir başlangıç demek.
   const first = body.querySelector("input, select, textarea");
-  if (first && window.matchMedia("(min-width:900px)").matches) first.focus();
+  if (first) { try { first.focus({ preventScroll: true }); } catch (e) { first.focus(); } }
   return { close: close, body: body };
 }
 

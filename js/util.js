@@ -208,3 +208,13 @@ export function toast(msg, kind) {
   setTimeout(function () { t.classList.add("out"); }, kind === "err" ? 5200 : 3200);
   setTimeout(function () { t.remove(); }, kind === "err" ? 5600 : 3600);
 }
+
+/* ---------------- dokunsal geri bildirim ---------------- */
+
+// Atölye gürültülü: sesli uyarı duyulmaz, ekrandaki yazıyı da traktöre bakan
+// kişi görmez. Titreşim, "kaydedildi"yi ekrana bakmadan bilmenin tek yolu.
+// Desteklemeyen cihazda (iOS Safari) sessizce hiçbir şey yapmaz.
+export function buzz(desen) {
+  if (typeof navigator === "undefined" || !navigator.vibrate) return;
+  try { navigator.vibrate(desen || 30); } catch (e) { /* cihaz izin vermedi */ }
+}
