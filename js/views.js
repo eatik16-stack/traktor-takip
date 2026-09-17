@@ -9,6 +9,7 @@ import { myStepCode, can, canExact, myEmail } from "./auth.js";
 import * as flow from "./flow.js";
 import { scanLabel, scanText, barcodeSupported, cameraSupported,
          extractChassis, extractSaleCode } from "./scan.js";
+import { photoPicker, yukleVeBagla, photoStrip, bindPhotos } from "./photo-ui.js";
 
 export function go(hash) { location.hash = hash; }
 
@@ -255,6 +256,8 @@ export function istasyon(view, _p, rerender) {
     b.onclick = function () { stSel = b.dataset.sel; rerender(); };
   });
 
+  bindPhotoThumbs(view);
+
   const selId = sel ? sel.id : null;
   const s1 = $("#stp-start", view);
   if (s1) s1.onclick = async function () {
@@ -462,7 +465,7 @@ function reworkPanel(t, open, mine, extraButtons) {
             " · " + esc(d.detectedStepCode || "") + " · " + esc(d.detectedByName || "") +
             (d.repeatCount ? ' · <span style="color:var(--amber);font-weight:650">' + d.repeatCount + ". tekrar</span>" : "") +
             (d.rejectNote ? ' · <span style="color:var(--red)">red: ' + esc(d.rejectNote) + "</span>" : "") +
-          "</div></div>" +
+          "</div>" + photoStrip(d) + "</div>" +
         '<div class="rw-def-act">' +
           (d.status === "acik" ? '<button class="btn btn-primary btn-sm" data-dact="take">Üzerime Al</button>' :
            mineOne ? '<button class="btn btn-success btn-sm" data-dact="complete">✓ Bitti</button>' +
@@ -526,7 +529,16 @@ function defectCard(d, actions) {
     "</div></div>";
 }
 
+// Fotoğraf önizlemelerini bağlar. Her ekranda ayrı ayrı çağırmak yerine tek
+// yardımcı: yeni bir liste ekranı eklendiğinde unutulmasın.
+export function bindPhotoThumbs(root) {
+  bindPhotos(root, function (id) {
+    return data.defects.find(function (x) { return x.id === id; });
+  });
+}
+
 function bindDefectCards(root, refresh) {
+  bindPhotoThumbs(root);
   $$("[data-d]", root).forEach(function (cardEl) {
     const id = cardEl.dataset.d;
     $$("[data-dact]", cardEl).forEach(function (btn) {
@@ -725,8 +737,12 @@ export function openDefectDialog(tractorId, onDone) {
         '<small class="field-hint">Belirli bir istasyon seçerseniz traktör oraya iş emri olarak düşer ' +
         've iş bitince buraya geri döner. Sevke hazır bekleyen traktörde çıkan boya/pas ' +
         "hataları için bunu kullanın.</small></label>" +
-    "</div></div>");
+    "</div>" +
+    '<div id="d-photos"></div></div>');
   $("#p-slot", body).appendChild(picker.el);
+  // Fotoğraf isteğe bağlı: eldivenli biri hızlıca kaydetmek isteyebilir,
+  // yolunu kesmeyiz. Seçerse kayıt açıldıktan sonra yüklenir.
+  const fotoSecici = photoPicker($("#d-photos", body));
 
   // Öneri seçilince kaynak alanı da dolar (Excel'de aynı hata hep aynı kaynaktan)
   picker.onPick(function (it) {
@@ -747,7 +763,7 @@ export function openDefectDialog(tractorId, onDone) {
         if (!cat) { toast("Hata kategorisi seçin.", "err"); return "keep"; }
         try {
           const src = $("#d-src", body).value || picker.getSource() || null;
-          await flow.addDefect(tractorId, {
+          const defectId = await flow.addDefect(tractorId, {
             category: cat, description: desc, detectedStepId: t.currentStepId,
             source: src, originLocation: $("#d-org", body).value || null,
             partCode: $("#d-pcode", body).value, partName: $("#d-pname", body).value,
@@ -756,6 +772,19 @@ export function openDefectDialog(tractorId, onDone) {
           const yeni = picker.isNew();
           await catalogRemember(desc, cat, src);
           toast(yeni ? "Hata kaydedildi — yeni tanım olarak listeye eklendi." : "Hata kaydedildi.", "ok");
+          // Fotoğraflar kayıt AÇILDIKTAN sonra yüklenir: dosya yolu hata
+          // kimliğini içeriyor. Yükleme başarısız olursa kalite kaydı yerinde
+          // kalır — fotoğraf yüzünden hata kaydı kaybolmaz.
+          const fotolar = fotoSecici ? fotoSecici.files() : [];
+          if (fotolar.length && defectId) {
+            try {
+              await yukleVeBagla(defectId, fotolar, function (mesaj) { toast(mesaj, "ok"); });
+              toast(fotolar.length + " fotoğraf eklendi.", "ok");
+            } catch (e) {
+              toast("Hata kaydedildi ama fotoğraf yüklenemedi: " +
+                    ((e && e.message) || "") + " Kayıttan tekrar deneyebilirsiniz.", "err");
+            }
+          }
           if (onDone) onDone();
         } catch (e) { err(e); return "keep"; }
       }
