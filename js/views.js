@@ -179,11 +179,16 @@ export function istasyon(view, _p, rerender) {
   let stepButtons = "";
   if (sel && here(sel)) {
     const acikSayi = openOf(sel).length;
+    // Alt alta ve büyük: eldivenli başparmakla, ayakta, traktöre bakarken
+    // basılıyor. Yan yana dururken hem hedef küçülüyor hem de yanlış olana
+    // basma ihtimali artıyordu.
     stepButtons =
+      '<div class="step-acts">' +
       (!sel.currentStartedAt
         ? '<button class="btn btn-primary" id="stp-start">▶ Adımı Başlat</button>'
         : '<button class="btn btn-success" id="stp-finish">✓ Adımı Tamamla</button>') +
       (step.allowsDefect ? '<button class="btn btn-danger" id="stp-defect">⚠ Hata Ekle</button>' : "") +
+      "</div>" +
       (acikSayi ? '<span class="chip chip-red" style="align-self:center">' + acikSayi +
                   " hata kapanmadı</span>" : "");
   }
@@ -731,6 +736,8 @@ export function openDefectDialog(tractorId, onDone) {
 
   modal({
     title: "Hata Kaydı Aç", body: body,
+    // Yedi alanlık bir kayıt: ıskalanan bir dokunuşla kaybolmasın.
+    draftKey: "hata:" + tractorId,
     buttons: [{ label: "Vazgeç" }, {
       label: "⚠ Hatayı Kaydet", cls: "btn-danger",
       onClick: async function () {
