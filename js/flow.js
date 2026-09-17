@@ -664,3 +664,36 @@ export async function restoreDefect(defectId) {
 function defectById(id) {
   return data.defects.find(function (d) { return d.id === id; }) || null;
 }
+
+/* ---------------- hata kaydı fotoğrafları ---------------- */
+
+// Yüklenmiş fotoğrafların künyelerini hata kaydına ekler.
+//
+// Fotoğrafın kendisi dosya deposunda; burada yalnızca YOLU duruyor. Dosyayı
+// Firestore'a gömmek hem 1 MB belge sınırına takılır hem de her okumada
+// bedelini ödetirdi.
+export async function addDefectPhotos(defectId, kunye) {
+  if (!can(["kontrol", "onay", "rework", "operator"])) {
+    throw uyari("Fotoğraf ekleme yetkiniz yok.");
+  }
+  const d = data.defects.find(function (x) { return x.id === defectId; });
+  if (!d) throw uyari("Hata kaydı bulunamadı.");
+  const liste = (Array.isArray(d.photos) ? d.photos : []).concat(kunye || []);
+  await saveDoc("defects", defectId, { photos: liste });
+  await log("fotograf_eklendi", d.chassisNo,
+            (kunye || []).length + " fotoğraf · " + d.description);
+  return liste.length;
+}
+
+// Yanlış çekilmiş bir fotoğrafı listeden gizler. Dosya SİLİNMEZ: hata
+// fotoğrafı kalite kaydının parçası ve denetim kaydı gibi yok edilemez.
+export async function hideDefectPhoto(defectId, yol, reason) {
+  if (!can(["hata_duzenle"])) throw uyari("Fotoğraf gizleme yetkiniz yok.");
+  const d = data.defects.find(function (x) { return x.id === defectId; });
+  if (!d) throw uyari("Hata kaydı bulunamadı.");
+  const liste = (Array.isArray(d.photos) ? d.photos : []).map(function (f) {
+    return f && f.p === yol ? Object.assign({}, f, { hidden: true }) : f;
+  });
+  await saveDoc("defects", defectId, { photos: liste });
+  await log("fotograf_gizlendi", d.chassisNo, yol + (reason ? " · " + reason : ""));
+}

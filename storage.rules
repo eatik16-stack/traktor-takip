@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// Dosya erişim kuralları.
+//
+// Kapı, Firestore'daki kapının AYNISI: kim uygulamayı kullanabiliyorsa
+// dosyalara da o erişir. İkinci bir izin sistemi kurmuyoruz — tek yerden
+// yönetilen bir erişim listesi, iki yerde tutulan iki listeden her zaman
+// daha güvenlidir.
+//
+// Buradaki boyut ve tür sınırları SUNUCU tarafındadır: uygulamadaki
+// sıkıştırma bozulsa, biri kodu değiştirse ya da doğrudan API'ye istek
+// atsa bile bu sınırlar aşılamaz. Maliyet güvenliğinin asıl yeri burasıdır.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function girisYapmis() {
+      return request.auth != null && request.auth.token.email != null;
+    }
+
+    // allowed/<eposta> kaydı var mı ve hesap aktif mi?
+    function izinli() {
+      return girisYapmis()
+        && firestore.exists(/databases/(default)/documents/allowed/$(request.auth.token.email))
+        && firestore.get(/databases/(default)/documents/allowed/$(request.auth.token.email)).data.active == true;
+    }
+
+    // Hata kaydı fotoğrafları: defects/<hataId>/<dosya>.jpg
+    // Yanında küçük önizlemesi:  defects/<hataId>/<dosya>_k.jpg
+    match /defects/{defectId}/{dosya} {
+
+      allow read: if izinli();
+
+      // 2 MB sert tavan. Uygulama fotoğrafı ~250 KB'a indiriyor; bu sınır
+      // onun sekiz katı, yani normal kullanımda asla değmez. Değiyorsa
+      // bir şeyler ters gitmiş demektir ve yükleme reddedilmelidir.
+      allow create: if izinli()
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+
+      // Yüklenmiş bir fotoğrafın üzerine yazılamaz ve silinemez.
+      // Sebebi maliyet değil, kayıt bütünlüğü: hata fotoğrafı bir kalite
+      // kaydının parçası, denetim kaydı gibi sonradan değiştirilemez.
+      // Yanlış çekilmiş bir fotoğraf Firestore'da "gizli" işaretlenir,
+      // dosya yerinde durur. Saklama süresi yaşam döngüsü kuralıyla
+      // yönetilir, elle silmeyle değil.
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Tanımlanmamış her yol kapalı.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
