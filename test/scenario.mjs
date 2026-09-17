@@ -4,7 +4,7 @@
 // makinede aynı dosya tarayıcı konsolunda da çalıştırılabilir.
 
 export async function runScenario(ctx) {
-  const { flow, data, store, util, V, scan, ui, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
+  const { flow, data, store, util, V, scan, ui, photos, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
   const results = [];
   const check = function (name, cond, extra) {
     results.push({ name: name, ok: !!cond, extra: cond ? "" : String(extra == null ? "" : extra) });
@@ -770,6 +770,67 @@ export async function runScenario(ctx) {
           document.activeElement && document.activeElement.id === "t-odak",
           document.activeElement && document.activeElement.id);
     host.lastElementChild.remove();
+  }
+
+  /* ---------- 17. Hata kaydı fotoğrafları ----------
+     Kamera ve yükleme testte koşmaz; küçültme hesabı, dosya yolu deseni ve
+     kayda bağlama mantığı koşar. Yol deseni storage.rules ile birebir
+     uyuşmazsa fotoğraf sahada hiç yüklenemez — bu yüzden sabitliyoruz. */
+  if (photos) {
+    const P = photos;
+    let r = P.hedefOlcu(4032, 3024, P.UZUN_KENAR);
+    check("12MP fotoğraf 1600 piksele iniyor", r.w === 1600 && r.h === 1200, r);
+    r = P.hedefOlcu(3024, 4032, P.UZUN_KENAR);
+    check("Dikey fotoğrafta uzun kenar yükseklik", r.h === 1600 && r.w === 1200, r);
+    r = P.hedefOlcu(800, 600, P.UZUN_KENAR);
+    check("Küçük fotoğraf büyütülmüyor", r.w === 800 && r.h === 600, r);
+    r = P.hedefOlcu(4032, 3024, P.ONIZLEME_KENAR);
+    check("Önizleme 320 pikselde", r.w === 320 && r.h === 240, r);
+
+    const y = P.yolUret("d1", "f2");
+    check("Dosya yolu storage.rules deseniyle uyuşuyor",
+          y.p === "defects/d1/f2.jpg" && y.t === "defects/d1/f2_k.jpg", y);
+    check("Sert tavan kurallardaki ile aynı", P.AZAMI_BOYUT === 2 * 1024 * 1024, P.AZAMI_BOYUT);
+    check("Gizlenen fotoğraf listede görünmüyor",
+          P.gorunur([{ p: "a" }, { p: "b", hidden: true }]).length === 1);
+    check("Boyut okunur yazılıyor", P.okunurBoyut(250000) === "244 KB", P.okunurBoyut(250000));
+
+    // Künye hata kaydına yazılıyor ve üzerine eklenerek birikiyor.
+    const dAll = data.defects.filter(function (x) { return x.status !== "iptal"; });
+    if (dAll.length) {
+      const hedef = dAll[0];
+      const once = ((hedef.photos || []).length);
+      await flow.addDefectPhotos(hedef.id, [{ p: "defects/x/1.jpg", t: "defects/x/1_k.jpg", b: 1000 }]);
+      await waitFor(function () {
+        const d2 = data.defects.find(function (x) { return x.id === hedef.id; });
+        return d2 && (d2.photos || []).length === once + 1;
+      });
+      const d2 = data.defects.find(function (x) { return x.id === hedef.id; });
+      check("Fotoğraf künyesi hata kaydına yazıldı", (d2.photos || []).length === once + 1,
+            (d2.photos || []).length);
+      await flow.addDefectPhotos(hedef.id, [{ p: "defects/x/2.jpg", t: "defects/x/2_k.jpg", b: 1000 }]);
+      await waitFor(function () {
+        const d3 = data.defects.find(function (x) { return x.id === hedef.id; });
+        return d3 && (d3.photos || []).length === once + 2;
+      });
+      check("İkinci fotoğraf öncekini silmiyor",
+            (data.defects.find(function (x) { return x.id === hedef.id; }).photos || []).length === once + 2);
+
+      await flow.hideDefectPhoto(hedef.id, "defects/x/1.jpg", "yanlış kare");
+      await waitFor(function () {
+        const d4 = data.defects.find(function (x) { return x.id === hedef.id; });
+        return d4 && P.gorunur(d4.photos).length === once + 1;
+      });
+      const d5 = data.defects.find(function (x) { return x.id === hedef.id; });
+      check("Gizlenen fotoğraf listeden çıkıyor ama kayıt duruyor",
+            P.gorunur(d5.photos).length === once + 1 && (d5.photos || []).length === once + 2,
+            [(d5.photos || []).length, P.gorunur(d5.photos).length]);
+
+      const logs2 = await store.readLog(500);
+      const acts2 = logs2.map(function (l) { return l.action; });
+      check("Fotoğraf ekleme denetim kaydına yazılıyor", acts2.indexOf("fotograf_eklendi") !== -1);
+      check("Fotoğraf gizleme denetim kaydına yazılıyor", acts2.indexOf("fotograf_gizlendi") !== -1);
+    }
   }
 
   return results;
