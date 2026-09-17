@@ -10,6 +10,31 @@ const BASE = "https://www.gstatic.com/firebasejs/" + V + "/";
 
 let bundle = null;
 
+// Dosya deposu AYRI ve GEÇ yüklenir: fotoğraf kullanılmayan bir vardiyada
+// tarayıcı bu SDK'yı hiç indirmez. Normal kayıt akışı hızlanmasın diye değil,
+// yavaşlamasın diye.
+let storeBundle = null;
+
+export async function fbStorage() {
+  if (storeBundle) return storeBundle;
+
+  if (typeof window !== "undefined" && window.__TT_MOCK_STORAGE__) {
+    storeBundle = window.__TT_MOCK_STORAGE__;
+    return storeBundle;
+  }
+
+  const base = await fb();
+  const stMod = await import(BASE + "firebase-storage.js");
+  storeBundle = {
+    storage: stMod.getStorage(base.app),
+    ref: stMod.ref,
+    uploadBytesResumable: stMod.uploadBytesResumable,
+    getBytes: stMod.getBytes,
+    getDownloadURL: stMod.getDownloadURL
+  };
+  return storeBundle;
+}
+
 export async function fb() {
   if (bundle) return bundle;
 
