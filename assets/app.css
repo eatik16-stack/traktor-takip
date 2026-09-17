@@ -13,7 +13,7 @@
   --ink:#0f172a; --line:#e2e8f0; --bg:#f4f6fb; --card:#fff;
   --r:12px; --r-sm:8px;
   --shadow:0 1px 2px rgba(15,23,42,.06), 0 1px 3px rgba(15,23,42,.08);
-  --tap:46px;                      /* eldivenli parmak için en küçük dokunma alanı */
+  --tap:56px;                      /* eldivenli parmak için en küçük dokunma alanı */
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
@@ -157,9 +157,12 @@ a  { color:var(--blue); }
 .btn-danger  { background:var(--red);   border-color:var(--red);   color:#fff; }
 .btn-warn    { background:var(--amber); border-color:var(--amber); color:#fff; }
 .btn-ghost   { background:transparent; border-color:transparent; color:inherit; }
-.btn-sm { min-height:36px; padding:0 11px; font-size:13px; }
+.btn-sm { min-height:48px; padding:0 13px; font-size:14px; }
+/* 36px yalnızca yönetim tablolarında kalır: orada satır başına düşen işlem
+   çoktur, kullanıcı oturur ve eldivensizdir. Sahadaki hiçbir ekranda yok. */
+table.data .btn-sm { min-height:36px; padding:0 11px; font-size:13px; }
 .btn-block { width:100%; }
-.btn-lg { min-height:52px; font-size:16px; }
+.btn-lg { min-height:64px; font-size:17px; font-weight:700; }
 .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
 
 .field { display:block; margin-bottom:12px; }
@@ -246,7 +249,7 @@ table.data tbody tr.clickable:active { background:var(--bg); }
 .bstep-body { padding:8px 9px; min-height:44px; display:flex; flex-direction:column; gap:6px; }
 .bstep-empty { color:#94a3b8; font-size:12px; padding:6px 2px; }
 .bchip { display:flex; align-items:center; gap:6px; padding:7px 9px; border-radius:var(--r-sm);
-  background:var(--bg); font-size:12.5px; cursor:pointer; min-height:38px; }
+  background:var(--bg); font-size:12.5px; cursor:pointer; min-height:48px; }
 .bchip:active { background:#e8edf6; }
 .bchip .ch { font-weight:650; }
 .bchip .tm { margin-left:auto; color:var(--muted); font-size:11.5px; white-space:nowrap; }
@@ -424,3 +427,16 @@ table.data tbody tr.clickable:active { background:var(--bg); }
 .scan-diag { padding:0 14px 10px; margin:0; font-size:11px; color:var(--muted);
   opacity:.7; font-variant-numeric:tabular-nums; }
 .scan-foot { padding:0 14px calc(14px + var(--safe-b)); display:grid; gap:8px; }
+
+/* --- İstasyon adım işlemleri ---------------------------------------------
+   "Adımı Tamamla" ve "Hata Ekle" bu uygulamada en çok basılan iki düğme:
+   eldivenli başparmakla, ayakta, traktöre bakarken. Telefonda yan yana
+   durmaları hem hedefi küçültüyor hem de yanlış olana basma ihtimalini
+   artırıyordu; alt alta ve tam genişlikte duruyorlar. */
+.step-acts { display:grid; gap:10px; }
+.step-acts .btn { min-height:64px; font-size:17px; font-weight:700; width:100%; }
+.step-acts .btn-ghost { min-height:48px; font-size:15px; font-weight:600; }
+@media (min-width:560px) {
+  .step-acts { grid-template-columns:1fr 1fr; }
+  .step-acts .btn-ghost { grid-column:1 / -1; }
+}

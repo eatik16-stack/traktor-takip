@@ -4,7 +4,7 @@
 // makinede aynı dosya tarayıcı konsolunda da çalıştırılabilir.
 
 export async function runScenario(ctx) {
-  const { flow, data, store, util, V, scan, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
+  const { flow, data, store, util, V, scan, ui, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
   const results = [];
   const check = function (name, cond, extra) {
     results.push({ name: name, ok: !!cond, extra: cond ? "" : String(extra == null ? "" : extra) });
@@ -699,6 +699,77 @@ export async function runScenario(ctx) {
             scan.decodeImage(ZX, bos, bos.width, bos.height, false) === null,
             scan.decodeImage(ZX, bos, bos.width, bos.height, false));
     }
+  }
+
+  /* ---------- 16. Yarım kalan kayıt korunuyor ----------
+     Eldivenle, tek elle çalışırken perdeye denk gelen bir dokunuş olağan.
+     O dokunuş yedi alanlık hata kaydını götürmemeli. */
+  if (typeof document !== "undefined" && ui) {
+    const { modal } = ui;
+    const host = document.getElementById("modal-host");
+    const perdeyeDokun = function (back) {
+      back.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    };
+
+    // Boş pencere: perdeye dokununca sorusuz kapanır.
+    modal({ title: "Boş", body: '<input class="input" id="t-bos">' });
+    let back = host.lastElementChild;
+    check("Boş pencere perdeye dokununca kapanır", !!back);
+    perdeyeDokun(back);
+    await sleep(60);
+    check("Boş pencerede soru sorulmuyor", host.children.length === 0,
+          host.children.length);
+
+    // Dolu pencere: perdeye dokununca KAPANMAZ, önce sorar.
+    modal({ title: "Dolu", body: '<input class="input" id="t-dolu">',
+            draftKey: "test:1" });
+    back = host.lastElementChild;
+    const inp = document.getElementById("t-dolu");
+    inp.value = "Sol çamurluk boya akıntısı";
+    perdeyeDokun(back);
+    await sleep(80);
+    check("Dolu pencere perdeye dokununca kapanmıyor",
+          host.contains(back), "pencere kayboldu");
+    const soru = host.lastElementChild;
+    check("Yerine onay soruluyor", soru !== back, "soru penceresi açılmadı");
+
+    // "Kapat" denince taslak saklanıyor.
+    const kapatBtn = Array.prototype.filter.call(
+      soru.querySelectorAll(".modal-foot .btn"),
+      function (b) { return b.textContent.indexOf("Kapat") !== -1; })[0];
+    check("Onay penceresinde Kapat düğmesi var", !!kapatBtn);
+    if (kapatBtn) {
+      kapatBtn.click();
+      await sleep(120);
+      check("Onaydan sonra pencere kapandı", host.children.length === 0,
+            host.children.length);
+
+      // Yeniden açınca yazdığı geri geliyor.
+      modal({ title: "Dolu", body: '<input class="input" id="t-dolu">',
+              draftKey: "test:1" });
+      await sleep(40);
+      const geri = document.getElementById("t-dolu");
+      check("Yarım kalan kayıt geri yükleniyor",
+            geri && geri.value === "Sol çamurluk boya akıntısı",
+            geri && geri.value);
+      check("Geri yüklendiği kişiye söyleniyor",
+            host.lastElementChild.textContent.indexOf("geri yüklendi") !== -1);
+      host.lastElementChild.remove();
+    }
+
+    // Escape temiz pencereyi kapatır.
+    modal({ title: "Escape", body: "<p>boş</p>" });
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await sleep(60);
+    check("Escape pencereyi kapatıyor", host.children.length === 0, host.children.length);
+
+    // Telefon genişliğinde de ilk alan odaklanmış olmalı.
+    modal({ title: "Odak", body: '<input class="input" id="t-odak">' });
+    await sleep(40);
+    check("Pencere açılınca ilk alan odaklanıyor",
+          document.activeElement && document.activeElement.id === "t-odak",
+          document.activeElement && document.activeElement.id);
+    host.lastElementChild.remove();
   }
 
   return results;
