@@ -90,6 +90,36 @@ export async function runScenario(ctx) {
   check("Adım başlatıldı", true);
   await expectThrow("İkinci kez başlatılamaz", function () { return flow.startWork(tid); }, "zaten başlatılmış");
 
+  /* ---------- 3b. Olay kaydı yazılamamışsa traktör KİLİTLENMEMELİ ----------
+     Fabrika Wi-Fi'si kesildiğinde traktör belgesi yazılıp olay kaydı
+     yazılamayabiliyor. Eskiden bu traktör bir daha hiçbir adımı kapatamıyor,
+     sahadaki kişi de düzeltemiyordu. Artık eksik kayıt tamamlanıyor. */
+  {
+    const t = data.tractors.find(function (x) { return x.id === tid; });
+    const kayipEv = "ev-kayip-" + Date.now();
+    await store.saveDoc("tractors", tid, { currentEventId: kayipEv });
+    await waitFor(function () {
+      const x = data.tractors.find(function (y) { return y.id === tid; });
+      return x && x.currentEventId === kayipEv;
+    });
+    let hata = null;
+    try { await flow.finishStep(tid, "ok", "olay kaydı kayıp"); }
+    catch (e) { hata = (e && e.message) || String(e); }
+    check("Olay kaydı kayıpken adım yine de kapanıyor", hata === null, hata);
+    const evler = await store.readEvents(tid);
+    const yeni = evler.find(function (e) { return e.id === kayipEv; });
+    check("Kayıp olay kaydı yeniden oluşturuluyor", !!yeni, evler.length);
+    check("Yeniden oluşan kayıtta adım bilgisi var",
+          !!(yeni && yeni.stepCode), yeni);
+    // Traktörü test akışının beklediği yere geri al.
+    await flow.moveToStep(tid, rdc.id, "test düzeltmesi");
+    await waitFor(function () {
+      const x = data.tractors.find(function (y) { return y.id === tid; });
+      return x && x.currentStepId === rdc.id;
+    });
+    await flow.startWork(tid);
+  }
+
   /* ---------- 4. Hata kaydı ---------- */
   let did;
   try {
@@ -111,7 +141,7 @@ export async function runScenario(ctx) {
   const n0 = (catalogFind("Oil flashing") || {}).n;
   await catalogRemember("oil flashing", "Tanımlı İş", null);
   await waitFor(function () { return (catalogFind("Oil flashing") || {}).n === n0 + 1; });
-  check("Var olan tanım tekrar yazılınca sayaç artar (kopya oluşmaz)",
+  check("Var olan tanım tekrar yazılınca sayacı artar (kopya oluşmaz)",
         (catalogFind("Oil flashing") || {}).n === n0 + 1 && data.catalog.length === before + 1);
 
   /* ---------- 4c. Şasi arama: son 6 hane ---------- */
@@ -622,7 +652,7 @@ export async function runScenario(ctx) {
     check("Fotoğrafta harf karışırsa bilinen koda düzeltilir",
           scan.extractSaleCode("MODEL GX72IF1 SERIAL", bilinen) === "GX721F1",
           scan.extractSaleCode("MODEL GX72IF1 SERIAL", bilinen));
-    check("Satış kodu yoksa uydurulmaz",
+    check("Satış kodu yoksa uydurulmuyor".replace("uydurulmuyor", "uydurulmaz"),
           scan.extractSaleCode("BURADA KOD YOK", []) === null,
           scan.extractSaleCode("BURADA KOD YOK", []));
     check("Fotoğraftan şasi 17 haneden bulunur",
