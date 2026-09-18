@@ -7,8 +7,7 @@ import { data, stepById, stepByCode, activeSteps, tractorById, tractorByChassis,
          ensureHistory, RECENT_DAYS } from "./store.js";
 import { myStepCode, can, canExact, myEmail } from "./auth.js";
 import * as flow from "./flow.js";
-import { scanLabel, scanText, barcodeSupported, cameraSupported,
-         extractChassis, extractSaleCode } from "./scan.js";
+import { scanText, cameraSupported, extractLabel, sasiUyari } from "./scan.js";
 import { photoPicker, yukleVeBagla, photoStrip, bindPhotos } from "./photo-ui.js";
 
 export function go(hash) { location.hash = hash; }
@@ -996,95 +995,76 @@ function newTractorDialog(onDone, presetChassis) {
   bilinenKodlar.sort();
 
   const body = el('<div>' +
+    (cameraSupported()
+      ? '<button type="button" class="btn btn-primary btn-lg btn-block" id="n-read">' +
+          "📷 Etiketi Oku</button>" +
+        '<small class="field-hint" id="n-read-hint" style="display:block;margin:6px 0 14px">' +
+          "Tek fotoğraf yeter: şasi ve satış kodu birlikte okunur. Üç satırın " +
+          "üçü de kadraja girsin.</small>"
+      : "") +
     '<div class="form-grid">' +
       '<label class="field field-wide"><span>Şasi No *</span>' +
-        '<div class="with-btn">' +
-          '<input class="input input-lg" id="n-ch" autocomplete="off" autocapitalize="characters" ' +
-            'inputmode="latin" value="' + esc(presetChassis || "") + '">' +
-          (barcodeSupported() && cameraSupported()
-            ? '<button type="button" class="btn btn-primary" id="n-scan" title="Etiketteki barkodu okut">📷</button>' : "") +
-        "</div>" +
-        '<small class="field-hint" id="n-ch-hint">' +
-          (barcodeSupported() && cameraSupported()
-            ? "Kamera simgesine basın ve etiketi okutun — barkodlu ne varsa alınır."
-            : "Bu cihazda kamera kullanılamıyor — numarayı elle yazın.") + "</small></label>" +
+        '<input class="input input-lg" id="n-ch" autocomplete="off" autocapitalize="characters" ' +
+          'inputmode="latin" value="' + esc(presetChassis || "") + '">' +
+        '<small class="field-hint" id="n-ch-hint">17 hane, MEA ile başlar. ' +
+          "Okunduktan sonra etiketle karşılaştırın.</small></label>" +
       '<label class="field"><span>Satış Kodu</span>' +
-        '<div class="with-btn">' +
-          '<input class="input" id="n-sc" list="n-sc-list" autocomplete="off" autocapitalize="characters">' +
-          (cameraSupported()
-            ? '<button type="button" class="btn" id="n-ocr" title="Etiketi fotoğraflayıp oku">📷</button>' : "") +
-        "</div>" +
+        '<input class="input" id="n-sc" list="n-sc-list" autocomplete="off" autocapitalize="characters">' +
         '<datalist id="n-sc-list">' + bilinenKodlar.map(function (c) {
           return '<option value="' + esc(c) + '">';
         }).join("") + "</datalist>" +
-        '<small class="field-hint" id="n-sc-hint">Fotoğraftan okunursa kontrol edip onaylayın.</small></label>' +
+        '<small class="field-hint" id="n-sc-hint">Fotoğraftan okunursa kontrol edin.</small></label>' +
       '<label class="field"><span>Kabin Anahtar No</span><input class="input" id="n-ck" autocomplete="off"></label>' +
     "</div></div>");
 
   const chIn = $("#n-ch", body), scIn = $("#n-sc", body);
   const chHint = $("#n-ch-hint", body), scHint = $("#n-sc-hint", body);
 
-  const scanBtn = $("#n-scan", body);
-  if (scanBtn) scanBtn.onclick = async function () {
-    scanBtn.disabled = true;
-    try {
-      // Etiketteki bütün barkodlar okunur. Satış kodu da barkodluysa oradan
-      // gelir ve fotoğraf okumaya (OCR) hiç gerek kalmaz.
-      const r = await scanLabel(bilinenKodlar);
-      if (r) {
-        if (r.chassis) {
-          chIn.value = normChassis(r.chassis);
-          chHint.textContent = "Barkoddan okundu: " + chIn.value;
-          chHint.className = "field-hint hint-ok";
-        } else {
-          chHint.textContent = "Şasi barkodu okunamadı — elle yazın.";
-          chHint.className = "field-hint hint-err";
-        }
-        if (r.saleCode) {
-          scIn.value = r.saleCode;
-          scHint.textContent = "Barkoddan okundu: " + r.saleCode + " — bu okuma birebirdir.";
-          scHint.className = "field-hint hint-ok";
-        } else if (!scIn.value) {
-          scHint.textContent = cameraSupported()
-            ? "Satış kodu barkodda yok. Yandaki fotoğraf düğmesiyle okutun veya elle yazın."
-            : "Satış kodunu elle yazın.";
-          scHint.className = "field-hint";
-        }
-        if (!r.saleCode && cameraSupported()) scIn.focus();
-      }
-    } catch (e) { err(e); } finally { scanBtn.disabled = false; }
-  };
-
-  const ocrBtn = $("#n-ocr", body);
-  if (ocrBtn) ocrBtn.onclick = async function () {
-    ocrBtn.disabled = true;
-    scHint.className = "field-hint";
+  // TEK fotoğraf, iki alan. Etiketteki barkod fabrikada silik basılıyor ve
+  // güvenilir okunmuyordu; yazıdan okumak (OCR) daha sağlam çıktı.
+  const readBtn = $("#n-read", body);
+  if (readBtn) readBtn.onclick = async function () {
+    readBtn.disabled = true;
+    const rHint = $("#n-read-hint", body);
+    rHint.textContent = "Okunuyor…";
+    rHint.className = "field-hint";
     try {
       const text = await scanText();
-      if (text != null) {
-        const kod = extractSaleCode(text, bilinenKodlar);
-        if (kod) {
-          scIn.value = kod;
-          const tanidik = bilinenKodlar.indexOf(kod) !== -1;
-          scHint.textContent = tanidik
-            ? "Okundu ve daha önce kullanılmış bir kodla eşleşti: " + kod + ". Yine de kontrol edin."
-            : "Okundu: " + kod + " — daha önce kullanılmamış bir kod, etiketle karşılaştırın.";
-          scHint.className = "field-hint " + (tanidik ? "hint-ok" : "");
-        } else {
-          scHint.textContent = "Fotoğraftan satış kodu seçilemedi, elle yazın.";
-          scHint.className = "field-hint hint-err";
-        }
-        // Etikette şasi de yazıyor; alan boşsa oradan doldur.
-        if (!normChassis(chIn.value)) {
-          const ch = extractChassis(text);
-          if (ch && ch.length >= 10) {
-            chIn.value = ch;
-            chHint.textContent = "Fotoğraftan okundu: " + ch + " — barkodla doğrulayın.";
-            chHint.className = "field-hint";
-          }
-        }
+      if (text == null) { rHint.textContent = "Okuma iptal edildi."; return; }
+      const r = extractLabel(text, bilinenKodlar, "MEA");
+
+      if (r.chassis) {
+        chIn.value = r.chassis;
+        const uyari = sasiUyari(r.chassis, "MEA");
+        chHint.textContent = uyari
+          ? "Okundu: " + r.chassis + " — " + uyari
+          : "Okundu: " + r.chassis + " — etiketle bir kez karşılaştırın.";
+        chHint.className = "field-hint " + (uyari ? "hint-err" : "hint-ok");
+      } else {
+        // Motor numarasından parça kesip şasi uydurmaktansa boş bırakırız.
+        chHint.textContent = "Şasi okunamadı — 17 haneyi elle yazın. " +
+          "(Etiketteki 22 haneli numara motor numarasıdır, şasi değil.)";
+        chHint.className = "field-hint hint-err";
       }
-    } catch (e) { err(e); } finally { ocrBtn.disabled = false; }
+
+      if (r.saleCode) {
+        scIn.value = r.saleCode;
+        const tanidik = bilinenKodlar.indexOf(r.saleCode) !== -1;
+        scHint.textContent = tanidik
+          ? "Okundu: " + r.saleCode + " — daha önce kullanılmış bir kod."
+          : "Okundu: " + r.saleCode + " — bu kod ilk kez kullanılıyor, kontrol edin.";
+        scHint.className = "field-hint " + (tanidik ? "hint-ok" : "");
+      } else if (!scIn.value) {
+        scHint.textContent = "Satış kodu okunamadı, elle yazın.";
+        scHint.className = "field-hint hint-err";
+      }
+
+      rHint.textContent = (r.chassis && r.saleCode)
+        ? "İkisi de okundu. Kontrol edip kaydedin."
+        : "Eksik kalan alanı elle tamamlayın ya da daha yakından tekrar çekin.";
+      if (!r.chassis) chIn.focus();
+    } catch (e) { err(e); rHint.textContent = "Okunamadı: " + ((e && e.message) || ""); }
+    finally { readBtn.disabled = false; }
   };
 
   modal({

@@ -622,7 +622,42 @@ export async function runScenario(ctx) {
           scan.extractSaleCode("BURADA KOD YOK", []) === null,
           scan.extractSaleCode("BURADA KOD YOK", []));
     check("Fotoğraftan şasi 17 haneden bulunur",
-          scan.extractChassis("VIN *MEACBBBTAS4940949*") === "MEACBBBTAS4940949");
+          scan.extractChassis("VIN\nMEACBBBTAS4940949") === "MEACBBBTAS4940949",
+          scan.extractChassis("VIN\nMEACBBBTAS4940949"));
+
+    /* --- Gerçek etiket: üç numara alt alta ---
+       MEA0T15DGS4940395        şasi          17 hane
+       GX706F2                  satış kodu
+       SJV326CRE652024K016658   motor no      22 hane
+       Sahadaki hata şuydu: şasi okunamayınca motor numarasından 17 hane
+       kesilip şasi diye yazılıyordu. Yanlış ama makul görünen bir numara,
+       hiç numara olmamasından çok daha tehlikeli. */
+    const ETIKET = "TAFE International Trak.\nMEA0T15DGS4940395\nGX706F2\nSJV326CRE652024K016658";
+    check("Gerçek etiketten şasi doğru okunuyor",
+          scan.extractChassis(ETIKET) === "MEA0T15DGS4940395", scan.extractChassis(ETIKET));
+    check("Motor numarası şasi sanılmıyor",
+          scan.extractChassis(ETIKET) !== "SJV326CRE652024K01", scan.extractChassis(ETIKET));
+
+    const SASISIZ = "TAFE International Trak.\nGX706F2\nSJV326CRE652024K016658";
+    check("Şasi okunamazsa motor numarasından KESİLMİYOR",
+          scan.extractChassis(SASISIZ) === null, scan.extractChassis(SASISIZ));
+    check("Bozuk uzun kelimeden şasi uydurulmuyor",
+          scan.extractChassis("IV326CREG52024K016658\nGX706F2") === null,
+          scan.extractChassis("IV326CREG52024K016658\nGX706F2"));
+
+    // VIN'de I, O, Q hiç yoktur; OCR bunları gördüyse kesin yanılmıştır.
+    check("O yerine 0 okunursa düzeltiliyor",
+          scan.extractChassis("MEAoT15DGS494o395") === "MEA0T15DGS4940395",
+          scan.extractChassis("MEAoT15DGS494o395"));
+
+    const L = scan.extractLabel(ETIKET, ["GX706F2"], "MEA");
+    check("Tek fotoğraftan iki alan birden geliyor",
+          L.chassis === "MEA0T15DGS4940395" && L.saleCode === "GX706F2", L);
+
+    check("Kısa numara uyarı veriyor", scan.sasiUyari("MEA123").indexOf("17 hane") !== -1);
+    check("MEA ile başlamayan numara uyarı veriyor",
+          scan.sasiUyari("XYZ0T15DGS4940395").indexOf("MEA") !== -1);
+    check("Doğru numarada uyarı yok", scan.sasiUyari("MEA0T15DGS4940395") === "");
   }
 
   /* ---------- 15b. Kameradan gelen görüntünün çözülmesi ----------
