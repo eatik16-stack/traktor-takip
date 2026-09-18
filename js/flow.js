@@ -53,6 +53,11 @@ export function pendingSteps(t) {
 // Yönlendirme bu ayrıma dayanır.
 
 export function isReworkStep(s)  { return !!s && s.kind === "rework"; }
+
+// Kayıt noktası: burada iş YAPILMAZ, yalnızca traktörün oradan geçtiği
+// kaydedilir. C-3'te traktör açılır, C-5'te devralınır. İki düğme (başlat +
+// tamamla) yerine tek hareket olur; adım o hareketle kapanır.
+export function isRecordStep(s) { return !!s && s.kind === "kayit"; }
 export function isQualityStep(s) { return !!s && (s.kind === "kontrol" || s.kind === "onay"); }
 
 // Bir traktörde rework istasyonunu ilgilendiren iş var mı? "rework_tamam"
@@ -156,6 +161,14 @@ export async function createTractor(fields) {
   });
   await addEventDoc(id, evId, first, now);
   await log("traktor_olusturuldu", chassis, first.code);
+
+  // İlk adım bir KAYIT NOKTASI ise kaydın kendisi o adımdır: traktör orada
+  // beklemez, bir sonraki istasyona geçer. C-3'te traktörü açmak, C-3'ü
+  // yapmış olmak demektir.
+  if (isRecordStep(first)) {
+    try { await finishStep(id, "ok", "kayıt açıldı"); }
+    catch (e) { /* adım kapanamadıysa traktör C-3'te kalır, kayıt yine durur */ }
+  }
   return id;
 }
 
@@ -459,7 +472,10 @@ export async function fixChassis(tractorId, yeniNo, reason) {
 /* ---------------- hata kaydı ---------------- */
 
 export async function addDefect(tractorId, fields) {
-  if (!can(["kontrol", "onay"])) throw uyari("Hata kaydı açma yetkiniz yok.");
+  // Üretim operatörü de kendi istasyonunda gördüğü hatayı kaydedebilir:
+  // C-5'te traktörü devralan kişinin hatayı yazabilmesi gerekiyor. Onay
+  // yetkisi ayrı; dört göz kuralı bundan etkilenmez.
+  if (!can(["kontrol", "onay", "operator"])) throw uyari("Hata kaydı açma yetkiniz yok.");
   const t = tractorById(tractorId);
   if (!t) throw uyari("Traktör bulunamadı.");
   const category = String(fields.category || "").trim();
@@ -518,8 +534,14 @@ export async function takeDefect(defectId) {
   const d = defectById(defectId);
   if (!d) throw uyari("Hata kaydı bulunamadı.");
   if (d.status !== "acik") throw uyari("Bu kayıt '" + d.status + "' durumunda, üzerine alınamaz.");
+  // Rework'ün hangi istasyonda yapıldığı da yazılır: "hangi istasyon en çok
+  // hata kapatıyor" sorusu ancak böyle cevaplanabiliyor.
+  const tr = tractorById(d.tractorId);
+  const yer = tr ? stepById(tr.currentStepId) : null;
   await saveDoc("defects", defectId, {
     status: "reworkta", reworkBy: myEmail(), reworkByName: myName(),
+    reworkStepId: yer ? yer.id : null,
+    reworkStepCode: yer ? yer.code : null,
     reworkStartedAt: new Date().toISOString()
   });
   await log("rework_ustlenildi", d.chassisNo, d.description);

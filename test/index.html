@@ -20,6 +20,7 @@ import * as flow from "../js/flow.js";
 import * as scan from "../js/scan.js";
 import * as ui from "../js/ui.js";
 import * as photos from "../js/photos.js";
+import * as seedData from "../js/seed.js";
 import { data } from "../js/store.js";
 import { seedAll, rapor, stepUsage, renumberSteps } from "../js/views-admin.js";
 import { watchSession, session } from "../js/auth.js";
@@ -58,6 +59,7 @@ window.addEventListener("error", e => {
     results = await runScenario({
       flow, data, store, util, V, scan, ui, photos, stepUsage, renumberSteps, mock: window.__MOCK__, sleep, waitFor,
       seed: seedAll,
+      seedData: seedData,
       buildReport: REPORT_FOR_TEST
     });
   } catch (e) {
