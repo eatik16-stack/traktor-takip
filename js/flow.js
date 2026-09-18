@@ -105,6 +105,12 @@ export function isOverdue(t) {
 /* ---------------- traktör ---------------- */
 
 export async function createTractor(fields) {
+  // Kayıt açmak hattaki bir iştir: üretim ve kalite personeli yapar.
+  // "Yönetim (sadece rapor)" rolü rapor okur, veri üretmez — simülasyonda
+  // bu rolün traktör açabildiği ortaya çıktı, kapatıldı.
+  if (!can(["operator", "kontrol", "onay", "rework"])) {
+    throw uyari("Traktör kaydı açma yetkiniz yok.");
+  }
   const chassis = normChassis(fields.chassisNo);
   if (chassis.length < 3) throw uyari("Şasi no en az 3 karakter olmalı.");
   // Aynı şasi ikinci kez açılırsa traktörün geçmişi iki kayda bölünür:
