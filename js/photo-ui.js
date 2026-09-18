@@ -120,9 +120,11 @@ export function bindPhotos(root, defectById) {
     P.adres(btn.getAttribute("data-p")).then(function (url) {
       btn.style.backgroundImage = 'url("' + url + '")';
       btn.classList.add("on");
-    }).catch(function () {
+    }).catch(function (e) {
+      try { console.warn("[foto] önizleme açılamadı", btn.getAttribute("data-p"), e); } catch (x) {}
       btn.classList.add("ph-err");
       btn.textContent = "!";
+      btn.title = "Önizleme açılamadı: " + ((e && e.message) || "");
     });
   };
 
@@ -191,7 +193,9 @@ export function openViewer(foto, index, d) {
         P.sonYol ? "erişim: " + P.sonYol : ""
       ].filter(Boolean).join(" · ");
     }).catch(function (e) {
-      diag.textContent = "Fotoğraf açılamadı: " + ((e && e.message) || "");
+      // Sessizce asılı kalmaktansa sebebini söylemek her zaman iyidir.
+      try { console.warn("[foto] açılamadı", f.p, e); } catch (x) {}
+      diag.textContent = "Fotoğraf açılamadı: " + ((e && e.message) || "bilinmeyen hata");
       diag.className = "ph-view-diag scan-err";
     });
   }

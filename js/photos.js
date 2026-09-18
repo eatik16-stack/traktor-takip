@@ -141,29 +141,54 @@ const onbellek = {};
 // Hangi yolun işe yaradığını tanı satırında gösterebilmek için saklanır.
 export let sonYol = "";
 
+// Sıkı mod: dosyayı getBytes ile indirir, yani güvenlik kurallarından geçer
+// ve ortaya paylaşılabilir bir adres çıkmaz. Bunun çalışması için deponun
+// CORS ayarı gerekir; ayar yoksa tarayıcı isteği ENGELLER ve bazı
+// tarayıcılarda hata bile vermeden ASILI KALIR. Bu yüzden varsayılan
+// KAPALIDIR — CORS kurulduktan sonra açılır.
+export let sikiMod = false;
+export function setSikiMod(v) { sikiMod = !!v; }
+
+// Hiçbir isteğin sonsuza kadar asılı kalmamasını garanti eder. Asılı kalan
+// bir istek kullanıcıya "yükleniyor…" yazıp susan bir ekran bırakır; hata
+// vermek her zaman daha iyidir.
+function zamanAsimi(sozVerilen, ms, mesaj) {
+  return new Promise(function (resolve, reject) {
+    let bitti = false;
+    const t = setTimeout(function () {
+      if (!bitti) { bitti = true; reject(new Error(mesaj)); }
+    }, ms);
+    sozVerilen.then(function (v) {
+      if (!bitti) { bitti = true; clearTimeout(t); resolve(v); }
+    }, function (e) {
+      if (!bitti) { bitti = true; clearTimeout(t); reject(e); }
+    });
+  });
+}
+
 // Bir dosyanın görüntülenebilir adresini verir.
-//
-// ÖNCE getBytes: bu yol güvenlik kurallarından geçer ve ortaya paylaşılabilir
-// bir adres ÇIKMAZ — bağlantıyı ele geçiren birinin dosyayı açması mümkün
-// olmaz. Tarayıcı ya da depo ayarı buna izin vermezse getDownloadURL'e
-// düşeriz; o da çalışır ama jetonlu, kalıcı bir adres üretir. Hangisinin
-// kullanıldığı sonYol'da görünür.
 export async function adres(yol) {
   if (onbellek[yol]) return onbellek[yol];
-  const S = await fbStorage();
+  const S = await zamanAsimi(fbStorage(), 20000, "depo bağlantısı kurulamadı");
   const r = S.ref(S.storage, yol);
-  try {
-    const buf = await S.getBytes(r, AZAMI_BOYUT);
-    const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
-    sonYol = "kurallı";
-    onbellek[yol] = url;
-    return url;
-  } catch (e) {
-    const url = await S.getDownloadURL(r);
-    sonYol = "jetonlu";
-    onbellek[yol] = url;
-    return url;
+
+  if (sikiMod) {
+    try {
+      const buf = await zamanAsimi(S.getBytes(r, AZAMI_BOYUT), 20000, "dosya indirilemedi (CORS?)");
+      const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
+      sonYol = "kurallı";
+      onbellek[yol] = url;
+      return url;
+    } catch (e) {
+      // Sıkı mod bu depoda çalışmıyor; bir daha denemeyip normal yola geçeriz.
+      sikiMod = false;
+    }
   }
+
+  const url = await zamanAsimi(S.getDownloadURL(r), 20000, "dosya adresi alınamadı");
+  sonYol = "jetonlu";
+  onbellek[yol] = url;
+  return url;
 }
 
 // Pencere kapanınca bellekteki görüntüleri bırakır.
