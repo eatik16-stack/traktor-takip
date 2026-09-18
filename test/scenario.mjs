@@ -946,5 +946,66 @@ export async function runScenario(ctx) {
     }
   }
 
+  /* ---------- 18. Yetki matrisi ----------
+     8 istasyon + yönetici. Her rolün neyi YAPABİLDİĞİ ve neyi
+     YAPAMADIĞI tek tabloda. Bir rol fazladan yetki kazanırsa burası düşer. */
+  {
+    const ROL = [
+      { m: "c3@x", ad: "C-3 / Üretim",   r: ["operator"], kod: "C-3" },
+      { m: "rdc@x", ad: "RDC / Kalite",  r: ["kontrol"],  kod: "RDC" },
+      { m: "rw1@x", ad: "RW-1 / Rework", r: ["rework"],   kod: "RW-1" },
+      { m: "pdi@x", ad: "PDI / Onay",    r: ["onay", "kontrol"], kod: "PDI" },
+      { m: "yon@x", ad: "Yönetim",       r: ["yonetim"],  kod: "" }
+    ];
+    ROL.forEach(function (x) { mock.seedAllowed(x.m, x.ad, x.r, x.kod); });
+
+    const hedef = data.tractors.find(function (t) { return t.status === "devam"; }) ||
+                  data.tractors[0];
+    const birHata = data.defects.find(function (d) { return d.status === "onaylandi"; }) ||
+                    data.defects[0];
+
+    const dene = async function (mail, ad, fn) {
+      mock.signInAs(mail, mail);
+      await sleep(15);
+      try { await fn(); return "YAPABİLİR"; }
+      catch (e) { return (e && e.message) || "engel"; }
+    };
+
+    const matris = [];
+    for (const x of ROL) {
+      const satir = { rol: x.ad };
+      satir.traktorAc = await dene(x.m, x.ad, function () {
+        return flow.createTractor({ chassisNo: "YETKI" + x.m.slice(0, 3) + Date.now() });
+      });
+      satir.hataAc = await dene(x.m, x.ad, function () {
+        return flow.addDefect(hedef.id, { category: "Diğer", description: "yetki denemesi" });
+      });
+      satir.hataSil = await dene(x.m, x.ad, function () {
+        return flow.cancelDefect(birHata.id, "yetki denemesi");
+      });
+      satir.sevk = await dene(x.m, x.ad, function () {
+        const h = data.tractors.find(function (t) { return t.status === "sevke_hazir"; });
+        return h ? flow.dispatchTractor(h.id) : Promise.reject(new Error("sevke hazır traktör yok"));
+      });
+      matris.push(satir);
+    }
+    mock.signInAs("admin@test.local", "Yönetici");
+    await sleep(20);
+
+    const bul = function (rol) { return matris.find(function (m) { return m.rol === rol; }); };
+    const c3 = bul("C-3 / Üretim"), rdc = bul("RDC / Kalite");
+    const rw1 = bul("RW-1 / Rework"), yon = bul("Yönetim");
+
+    check("Üretim operatörü hata kaydı AÇAMAZ", c3.hataAc !== "YAPABİLİR", c3.hataAc);
+    check("Kalite kontrolör hata kaydı açabilir", rdc.hataAc === "YAPABİLİR", rdc.hataAc);
+    check("Rework operatörü hata kaydı AÇAMAZ", rw1.hataAc !== "YAPABİLİR", rw1.hataAc);
+    check("Yönetim (sadece rapor) traktör AÇAMAZ", yon.traktorAc !== "YAPABİLİR", yon.traktorAc);
+    check("Yönetim (sadece rapor) sevk EDEMEZ", yon.sevk !== "YAPABİLİR", yon.sevk);
+    check("hata_duzenle yetkisi olmayan hata kaydını SİLEMEZ",
+          rdc.hataSil !== "YAPABİLİR" && rw1.hataSil !== "YAPABİLİR",
+          [rdc.hataSil, rw1.hataSil]);
+    results.__matris = matris;
+  }
+
   return results;
 }
