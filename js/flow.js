@@ -107,7 +107,17 @@ export function isOverdue(t) {
 export async function createTractor(fields) {
   const chassis = normChassis(fields.chassisNo);
   if (chassis.length < 3) throw uyari("Şasi no en az 3 karakter olmalı.");
-  if (tractorByChassis(chassis)) throw uyari(chassis + " şasi numarası zaten kayıtlı.");
+  // Aynı şasi ikinci kez açılırsa traktörün geçmişi iki kayda bölünür:
+  // adımların bir kısmı birinde, bir kısmı ötekinde kalır ve hiçbir rapor
+  // doğru çıkmaz. Sevk edilmiş traktör de dahil, şasi bir kere kaydedilir.
+  const eski = tractorByChassis(chassis);
+  if (eski) {
+    const nerede = eski.status === "sevk_edildi" ? "sevk edilmiş"
+      : eski.status === "sevke_hazir" ? "sevke hazır bekliyor"
+      : (stepById(eski.currentStepId) || {}).code || "hatta";
+    throw uyari(chassis + " şasi numarası zaten kayıtlı (" + nerede +
+                "). Yeni kayıt açmak yerine listeden o traktörü açın.");
+  }
 
   const steps = activeSteps();
   if (!steps.length) throw uyari("Tanımlı adım yok. Önce Tanımlar > Adımlar ekranından adım tanımlayın.");
