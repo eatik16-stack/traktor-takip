@@ -154,6 +154,18 @@ export async function createTractor(fields) {
 }
 
 // Adımın her ziyareti için alt koleksiyona bir kayıt açar.
+// Olay kaydı yazılamamışsa (bağlantı kesintisi) yeniden kurulabilsin diye
+// traktörün şu anki adım bilgisi. updateEvent bunu merge ile yazar.
+function eventTemel(t) {
+  const s = stepById(t.currentStepId);
+  return {
+    stepId: t.currentStepId || null,
+    stepCode: s ? s.code : null,
+    stepName: s ? s.name : null,
+    enteredAt: t.currentEnteredAt || null
+  };
+}
+
 async function addEventDoc(tractorId, evId, step, enteredAt) {
   const f = await fb();
   await f.setDoc(f.doc(f.db, "tractors", tractorId, "events", evId), {
@@ -175,7 +187,7 @@ export async function startWork(tractorId) {
   });
   await updateEvent(tractorId, t.currentEventId, {
     startedAt: now, operator: myEmail(), operatorName: myName()
-  });
+  }, eventTemel(t));
   await log("adim_baslatildi", t.chassisNo, stepCodeOf(t));
 }
 
@@ -253,7 +265,7 @@ export async function finishStep(tractorId, result, note) {
     note: note || null,
     operator: t.currentOperator || myEmail(),
     operatorName: t.currentOperatorName || myName()
-  });
+  }, eventTemel(t));
 
   // --- traktör nereye gidecek? ---
   let next = null;
@@ -334,7 +346,7 @@ export async function moveToStep(tractorId, stepId, note, opts) {
       finishedAt: now, result: "yonlendirildi",
       startedAt: t.currentStartedAt || now,
       note: note || (target.code + " adımına yönlendirildi")
-    });
+    }, eventTemel(t));
   }
   const evId = newId("ev");
   const patch = {
