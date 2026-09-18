@@ -8,7 +8,8 @@ import { data, activeSteps, stepByCode, saveDoc, setDocFull, removeDoc,
 import { ROLES, roleLabels } from "./roles.js";
 import { myEmail, isAdmin } from "./auth.js";
 import { STEPS as SEED_STEPS, LOOKUPS as SEED_LOOKUPS, CATALOG_ITEMS as SEED_CATALOG,
-         PEOPLE as SEED_PEOPLE, KIND_COLOR, KIND_LABEL } from "./seed.js";
+         PEOPLE as SEED_PEOPLE } from "./seed.js";
+import { KIND_COLOR, KIND_LABEL } from "./kinds.js";
 import * as flow from "./flow.js";
 import { newId } from "./util.js";
 
