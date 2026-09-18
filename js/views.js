@@ -181,9 +181,13 @@ export function istasyon(view, _p, rerender) {
     // Alt alta ve büyük: eldivenli başparmakla, ayakta, traktöre bakarken
     // basılıyor. Yan yana dururken hem hedef küçülüyor hem de yanlış olana
     // basma ihtimali artıyordu.
+    // Kayıt noktasında (C-3, C-5 gibi) iş yapılmaz, traktör sadece teslim
+    // alınır. Başlat + Tamamla iki dokunuş demek; burada tek düğme yeter.
     stepButtons =
       '<div class="step-acts">' +
-      (!sel.currentStartedAt
+      (flow.isRecordStep(step)
+        ? '<button class="btn btn-success" id="stp-finish">✓ Devraldım</button>'
+        : !sel.currentStartedAt
         ? '<button class="btn btn-primary" id="stp-start">▶ Adımı Başlat</button>'
         : '<button class="btn btn-success" id="stp-finish">✓ Adımı Tamamla</button>') +
       (step.allowsDefect ? '<button class="btn btn-danger" id="stp-defect">⚠ Hata Ekle</button>' : "") +
@@ -265,7 +269,9 @@ export function istasyon(view, _p, rerender) {
   };
   const s2 = $("#stp-finish", view);
   if (s2) s2.onclick = async function () {
-    const acik = openOf(sel).length;
+    // Kayıt noktasında hatanın açık olması normaldir: hata zaten burada
+    // kaydedilip rework istasyonuna düşsün diye açılıyor. Sormadan geçilir.
+    const acik = flow.isRecordStep(step) ? 0 : openOf(sel).length;
     // Rework istasyonunda açık hata varken adımı kapatmak neredeyse her zaman
     // yanlışlıktır; engellemiyoruz ama sormadan geçmiyoruz.
     if (acik && !(await confirmDialog("Açık hata var",
@@ -1119,7 +1125,9 @@ export async function traktor(view, params, rerender) {
     (t.status === "devam" || t.status === "beklemede"
       ? '<div class="card"><div class="card-head"><h3>Bulunduğu Adım — ' + esc(cur ? cur.name : "") + "</h3></div>" +
         '<div class="btn-row">' +
-          (!t.currentStartedAt
+          (flow.isRecordStep(cur)
+            ? '<button class="btn btn-success" id="st-finish">✓ Devraldım</button>'
+            : !t.currentStartedAt
             ? '<button class="btn btn-primary" id="st-start">▶ Adımı Başlat</button>'
             : '<button class="btn btn-success" id="st-finish">✓ Adımı Tamamla</button>') +
           (cur && cur.allowsDefect ? '<button class="btn btn-danger" id="add-def">⚠ Hata Ekle</button>' : "") +
