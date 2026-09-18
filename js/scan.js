@@ -571,14 +571,81 @@ export function extractSaleCode(text, known) {
   return best;
 }
 
-// Şasi: 17 haneli VIN kalıbı (I, O, Q kullanılmaz). Barkod bazen başına/sonuna
-// ayraç koyar, onları temizleriz.
-export function extractChassis(text) {
-  const up = String(text || "").toUpperCase().replace(/[^A-Z0-9]/g, " ");
-  const vin = up.match(/\b[A-HJ-NPR-Z0-9]{17}\b/);
-  if (vin) return vin[0];
-  const uzun = up.split(/\s+/).filter(Boolean).sort(function (a, b) { return b.length - a.length; })[0];
-  return uzun && uzun.length >= 6 ? uzun : null;
+/* ---------------- şasi ---------------- */
+
+// Etikette ÜÇ numara alt alta duruyor ve ikisi birbirine benziyor:
+//
+//   MEA0T15DGS4940395        şasi          17 hane
+//   GX706F2                  satış kodu
+//   SJV326CRE652024K016658   motor no      22 hane
+//
+// Eski sürüm şasiyi okuyamadığında "en uzun kelimeyi" alıyordu ve motor
+// numarasından 17 hane kesip şasi diye yazıyordu. Yanlış ama makul görünen
+// bir numara üretmek, hiç numara üretmemekten çok daha kötü: kayıt yanlış
+// traktöre işlenir ve kimse fark etmez. Bu yüzden artık:
+//
+//   - yalnızca TAM 17 haneli bir kelime şasi olabilir,
+//   - 17'den uzun bir kelimeden ASLA parça kesilmez,
+//   - hiçbir aday yoksa null döner ve kişi elle yazar.
+
+// VIN'de I, O, Q hiç kullanılmaz; OCR bu üçünü gördüyse kesinlikle yanılmıştır.
+// Bunları düzeltmek tahmin değil, kural gereği.
+function vinDuzelt(t) {
+  return t.replace(/[IO Q]/g, function (c) { return c === "I" ? "1" : "0"; });
+}
+
+const VIN17 = /^[A-HJ-NPR-Z0-9]{17}$/;
+
+// Aday şasileri satır sırasıyla birlikte döndürür.
+function sasiAdaylari(text) {
+  const satirlar = String(text || "").toUpperCase().split(/[\r\n]+/);
+  const out = [];
+  satirlar.forEach(function (satir, si) {
+    satir.replace(/[^A-Z0-9]/g, " ").split(/\s+/).filter(Boolean).forEach(function (kelime) {
+      // 17'den uzun kelime motor numarasıdır; parçalamayız, atlarız.
+      if (kelime.length !== 17) return;
+      const duzeltilmis = vinDuzelt(kelime);
+      if (!VIN17.test(duzeltilmis)) return;
+      out.push({ v: duzeltilmis, satir: si, ham: kelime });
+    });
+  });
+  return out;
+}
+
+// Şasi numarası. Bulunamazsa null — uydurmaz.
+// known: daha önce kaydedilmiş şasilerin ön eki (varsayılan "MEA") tercih
+// sebebidir, şart değil: fabrika ön eki değişirse okuma yine çalışır.
+export function extractChassis(text, onEk) {
+  const ek = String(onEk || "MEA").toUpperCase();
+  const adaylar = sasiAdaylari(text);
+  if (!adaylar.length) return null;
+  if (adaylar.length === 1) return adaylar[0].v;
+
+  // Birden fazla 17 haneli aday varsa fabrika ön ekini taşıyan kazanır;
+  // o da yoksa etikette en üstte duran (motor numarasından önce gelen).
+  const ekli = adaylar.filter(function (a) { return a.v.indexOf(ek) === 0; });
+  const liste = ekli.length ? ekli : adaylar;
+  return liste.sort(function (a, b) { return a.satir - b.satir; })[0].v;
+}
+
+// Okunan şasinin beklenen biçimde olup olmadığını söyler. Kişiye
+// "kontrol et" demek için kullanılır — reddetmek için değil.
+export function sasiUyari(deger, onEk) {
+  const v = String(deger || "").toUpperCase();
+  const ek = String(onEk || "MEA").toUpperCase();
+  if (v.length !== 17) return "17 hane olmalı (" + v.length + " hane okundu)";
+  if (v.indexOf(ek) !== 0) return ek + " ile başlamıyor — etiketle karşılaştırın";
+  return "";
+}
+
+// Tek fotoğraftan etiketin tamamını okur: şasi ve satış kodu birlikte.
+// Sahada iki ayrı fotoğraf çektirmenin anlamı yok — ikisi de aynı etikette.
+export function extractLabel(text, knownCodes, onEk) {
+  return {
+    chassis: extractChassis(text, onEk),
+    saleCode: extractSaleCode(text, knownCodes),
+    text: String(text || "")
+  };
 }
 
 // İki kelime arasındaki harf farkı (Levenshtein) — kısa kodlar için yeterli.
