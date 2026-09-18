@@ -308,9 +308,18 @@ export async function addEvent(tractorId, ev) {
   return id;
 }
 
-export async function updateEvent(tractorId, eventId, patch) {
+// Olay kaydını günceller — YOKSA OLUŞTURUR.
+//
+// Neden upsert? Traktör belgesi yazılıp olay kaydı yazılamadığında (fabrika
+// Wi-Fi'si kesilir, sekme kapanır, tarayıcı arka plana atılır) traktörün
+// currentEventId'si var olmayan bir belgeyi gösterir. updateDoc böyle bir
+// belgeyi güncelleyemez ve hata verir; sonuç: o traktör bir daha HİÇBİR
+// adımı kapatamaz ve sahadaki kişi bunu kendi başına düzeltemez.
+// Merge ile yazmak eksik kaydı tamamlar, akış tıkanmaz.
+export async function updateEvent(tractorId, eventId, patch, temel) {
   const f = await fb();
-  await settle(f.updateDoc(f.doc(f.db, "tractors", tractorId, "events", eventId), patch));
+  const ref = f.doc(f.db, "tractors", tractorId, "events", eventId);
+  await settle(f.setDoc(ref, Object.assign({}, temel || {}, patch), { merge: true }));
 }
 
 export async function readEvents(tractorId) {
