@@ -364,18 +364,49 @@ export async function moveToStep(tractorId, stepId, note, opts) {
             (opts && opts.returnHere ? " | iş bitince geri dönecek" : ""));
 }
 
+// Beklemeye alma, traktörün BULUNDUĞU durumu geçici olarak dondurur.
+// Nereden geldiğini saklamak şart: sevke hazır bekleyen bir traktör bahçede
+// "parça bekliyor" diye kenara çekilip geri alındığında yine SEVKE HAZIR
+// olmalı. Aksi halde bütün adımları tamam, bekleyen adımı olmayan ama
+// sevk de edilemeyen bir kayıt kalıyor ortada — sistemden kaybolmuş oluyor.
 export async function holdTractor(tractorId, reason) {
   const t = tractorById(tractorId);
   if (!t) throw uyari("Traktör bulunamadı.");
-  await saveDoc("tractors", tractorId, { status: "beklemede", holdReason: reason || "" });
-  await log("beklemeye_alindi", t.chassisNo, reason || "");
+  if (t.status === "beklemede") throw uyari("Bu traktör zaten beklemede.");
+  if (t.status === "sevk_edildi") throw uyari("Sevk edilmiş traktör beklemeye alınamaz.");
+  await saveDoc("tractors", tractorId, {
+    status: "beklemede", holdReason: reason || "", holdFrom: t.status
+  });
+  await log("beklemeye_alindi", t.chassisNo,
+            (reason || "") + " (" + t.status + " durumundan)");
 }
 
 export async function releaseTractor(tractorId) {
   const t = tractorById(tractorId);
   if (!t) throw uyari("Traktör bulunamadı.");
-  await saveDoc("tractors", tractorId, { status: "devam", holdReason: null });
-  await log("beklemeden_cikarildi", t.chassisNo, "");
+  if (t.status !== "beklemede") throw uyari("Bu traktör beklemede değil.");
+  // Geldiği duruma döner. Eski kayıtlarda holdFrom yoksa, yapacak adımı
+  // kalmamış traktör sevke hazır sayılır — kilitli kalmasın.
+  let geri = t.holdFrom;
+  if (!geri || ["beklemede", "sevk_edildi"].indexOf(geri) !== -1) {
+    geri = pendingSteps(t).length ? "devam" : "sevke_hazir";
+  }
+  await saveDoc("tractors", tractorId, { status: geri, holdReason: null, holdFrom: null });
+  await log("beklemeden_cikarildi", t.chassisNo, geri + " durumuna döndü");
+  return geri;
+}
+
+// Adımları bitmiş ama bir şekilde "devam"da kalmış traktörü kurtarır.
+// Simülasyonda ortaya çıktı: beklemeye alınıp çıkarılan sevke hazır traktör
+// "devam"a düşüyor, bekleyen adımı olmadığı için de bir daha ilerleyemiyordu.
+export async function repairStuck(tractorId) {
+  const t = tractorById(tractorId);
+  if (!t) throw uyari("Traktör bulunamadı.");
+  if (t.status !== "devam") throw uyari("Bu traktör zaten ilerleyebilir durumda.");
+  if (pendingSteps(t).length) throw uyari("Traktörün yapılacak adımı var, kurtarma gerekmiyor.");
+  if (openDefects(tractorId).length) throw uyari("Açık hatası var; önce hatalar kapatılmalı.");
+  await saveDoc("tractors", tractorId, { status: "sevke_hazir", currentStartedAt: null });
+  await log("kurtarildi", t.chassisNo, "tüm adımlar tamam — sevke hazır yapıldı");
 }
 
 export async function dispatchTractor(tractorId) {

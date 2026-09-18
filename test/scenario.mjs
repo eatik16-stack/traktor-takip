@@ -841,6 +841,47 @@ export async function runScenario(ctx) {
     host.lastElementChild.remove();
   }
 
+  /* ---------- 16b. Beklemeye alma geldiği duruma döndürür ----------
+     Simülasyonda çıktı: sevke hazır bekleyen traktör bahçede "parça
+     bekliyor" diye kenara çekilip geri alınınca "devam"a düşüyordu.
+     Bütün adımları tamam, bekleyen adımı yok, sevk de edilemiyor —
+     sistemden kaybolmuş bir kayıt. */
+  {
+    const hazirT = data.tractors.find(function (x) { return x.status === "sevke_hazir"; });
+    if (hazirT) {
+      await flow.holdTractor(hazirT.id, "Parça bekleniyor");
+      await waitFor(function () {
+        const x = data.tractors.find(function (y) { return y.id === hazirT.id; });
+        return x && x.status === "beklemede";
+      });
+      check("Sevke hazır traktör beklemeye alınabiliyor", true);
+      await flow.releaseTractor(hazirT.id);
+      await waitFor(function () {
+        const x = data.tractors.find(function (y) { return y.id === hazirT.id; });
+        return x && x.status !== "beklemede";
+      });
+      const geri = data.tractors.find(function (y) { return y.id === hazirT.id; });
+      check("Beklemeden çıkınca SEVKE HAZIR'a dönüyor (devam'a değil)",
+            geri.status === "sevke_hazir", geri.status);
+      check("Beklemeden çıkan traktör sevk edilebiliyor",
+            geri.status === "sevke_hazir");
+      await expectThrow("Beklemede olmayan traktör serbest bırakılamaz",
+        function () { return flow.releaseTractor(hazirT.id); }, "beklemede değil");
+      await flow.holdTractor(hazirT.id, "ikinci kez");
+      await waitFor(function () {
+        const x = data.tractors.find(function (y) { return y.id === hazirT.id; });
+        return x && x.status === "beklemede";
+      });
+      await expectThrow("Zaten beklemedeki traktör tekrar beklemeye alınamaz",
+        function () { return flow.holdTractor(hazirT.id, "üçüncü"); }, "zaten beklemede");
+      await flow.releaseTractor(hazirT.id);
+      await waitFor(function () {
+        const x = data.tractors.find(function (y) { return y.id === hazirT.id; });
+        return x && x.status === "sevke_hazir";
+      });
+    }
+  }
+
   /* ---------- 17. Hata kaydı fotoğrafları ----------
      Kamera ve yükleme testte koşmaz; küçültme hesabı, dosya yolu deseni ve
      kayda bağlama mantığı koşar. Yol deseni storage.rules ile birebir
