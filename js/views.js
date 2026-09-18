@@ -1228,7 +1228,8 @@ export async function traktor(view, params, rerender) {
               '<span class="card-sub">' + esc(d.category) + "</span>" +
               (d.editCount ? '<br><span class="card-sub">✎ ' + d.editCount + " kez düzenlendi</span>" : "") +
               (d.status === "iptal" ? '<br><span class="card-sub">🗑 ' + esc(d.cancelledByName || "") +
-                                      " sildi: " + esc(d.cancelReason || "") + "</span>" : "") + "</td>" +
+                                      " sildi: " + esc(d.cancelReason || "") + "</span>" : "") +
+              photoStrip(d) + "</td>" +
             "<td>" + defectChip(d.status) + "</td>" +
             "<td>" + esc(d.detectedByName || "—") + "<br><span class='card-sub'>" +
               esc(d.detectedStepCode || "") + " · " + fmtDate(d.detectedAt, false) + "</span></td>" +
@@ -1378,7 +1379,8 @@ export function hatalar(view, _p, rerender) {
           "<td>" + fmtDate(d.detectedAt) + "</td>" +
           "<td><strong>" + esc(d.chassisNo || "") + "</strong></td>" +
           "<td>" + esc(d.description) +
-            (d.editCount ? ' <span class="card-sub">✎ ' + d.editCount + "</span>" : "") + "</td>" +
+            (d.editCount ? ' <span class="card-sub">✎ ' + d.editCount + "</span>" : "") +
+            photoStrip(d) + "</td>" +
           "<td>" + esc(d.category) + "</td>" +
           "<td>" + esc(d.detectedStepCode || "") + "</td>" +
           "<td>" + esc(d.detectedByName || "") + "</td>" +

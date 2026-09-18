@@ -794,6 +794,9 @@ export async function runScenario(ctx) {
     check("Gizlenen fotoğraf listede görünmüyor",
           P.gorunur([{ p: "a" }, { p: "b", hidden: true }]).length === 1);
     check("Boyut okunur yazılıyor", P.okunurBoyut(250000) === "244 KB", P.okunurBoyut(250000));
+    // Sıkı mod (getBytes) deponun CORS ayarını ister; ayar yokken istek
+    // hata bile vermeden asılı kalıyordu. Varsayılan KAPALI olmalı.
+    check("Sıkı erişim modu varsayılan kapalı", P.sikiMod === false, P.sikiMod);
 
     // Künye hata kaydına yazılıyor ve üzerine eklenerek birikiyor.
     const dAll = data.defects.filter(function (x) { return x.status !== "iptal"; });
