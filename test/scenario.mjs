@@ -77,6 +77,10 @@ export async function runScenario(ctx) {
 
   await expectThrow("Aynı şasi tekrar eklenemez",
     function () { return flow.createTractor({ chassisNo: CH }); }, "zaten kayıtlı");
+  await expectThrow("Mükerrer uyarısı traktörün nerede olduğunu söylüyor",
+    function () { return flow.createTractor({ chassisNo: CH }); }, "listeden o traktörü açın");
+  await expectThrow("Küçük/büyük harf ve boşluk farkı mükerreri gizlemiyor",
+    function () { return flow.createTractor({ chassisNo: " testmea0001 " }); }, "zaten kayıtlı");
   await expectThrow("Kısa şasi reddediliyor",
     function () { return flow.createTractor({ chassisNo: "AB" }); }, "en az 3");
 

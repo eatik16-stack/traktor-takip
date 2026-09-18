@@ -7,7 +7,6 @@ import { data, stepById, stepByCode, activeSteps, tractorById, tractorByChassis,
          ensureHistory, RECENT_DAYS } from "./store.js";
 import { myStepCode, can, canExact, myEmail } from "./auth.js";
 import * as flow from "./flow.js";
-import { scanText, cameraSupported, extractLabel, sasiUyari } from "./scan.js";
 import { photoPicker, yukleVeBagla, photoStrip, bindPhotos } from "./photo-ui.js";
 
 export function go(hash) { location.hash = hash; }
@@ -995,77 +994,52 @@ function newTractorDialog(onDone, presetChassis) {
   bilinenKodlar.sort();
 
   const body = el('<div>' +
-    (cameraSupported()
-      ? '<button type="button" class="btn btn-primary btn-lg btn-block" id="n-read">' +
-          "📷 Etiketi Oku</button>" +
-        '<small class="field-hint" id="n-read-hint" style="display:block;margin:6px 0 14px">' +
-          "Tek fotoğraf yeter: şasi ve satış kodu birlikte okunur. Üç satırın " +
-          "üçü de kadraja girsin.</small>"
-      : "") +
     '<div class="form-grid">' +
       '<label class="field field-wide"><span>Şasi No *</span>' +
         '<input class="input input-lg" id="n-ch" autocomplete="off" autocapitalize="characters" ' +
           'inputmode="latin" value="' + esc(presetChassis || "") + '">' +
-        '<small class="field-hint" id="n-ch-hint">17 hane, MEA ile başlar. ' +
-          "Okunduktan sonra etiketle karşılaştırın.</small></label>" +
+        '<small class="field-hint" id="n-ch-hint">Etiketteki 17 haneli numara. ' +
+          "Yazarken daha önce kayıtlı olup olmadığı kontrol edilir.</small></label>" +
       '<label class="field"><span>Satış Kodu</span>' +
         '<input class="input" id="n-sc" list="n-sc-list" autocomplete="off" autocapitalize="characters">' +
         '<datalist id="n-sc-list">' + bilinenKodlar.map(function (c) {
           return '<option value="' + esc(c) + '">';
         }).join("") + "</datalist>" +
-        '<small class="field-hint" id="n-sc-hint">Fotoğraftan okunursa kontrol edin.</small></label>' +
+        '<small class="field-hint">Örnek: GX706F2. Daha önce kullanılanlar listeden seçilebilir.</small></label>' +
       '<label class="field"><span>Kabin Anahtar No</span><input class="input" id="n-ck" autocomplete="off"></label>' +
     "</div></div>");
 
   const chIn = $("#n-ch", body), scIn = $("#n-sc", body);
-  const chHint = $("#n-ch-hint", body), scHint = $("#n-sc-hint", body);
+  const chHint = $("#n-ch-hint", body);
 
-  // TEK fotoğraf, iki alan. Etiketteki barkod fabrikada silik basılıyor ve
-  // güvenilir okunmuyordu; yazıdan okumak (OCR) daha sağlam çıktı.
-  const readBtn = $("#n-read", body);
-  if (readBtn) readBtn.onclick = async function () {
-    readBtn.disabled = true;
-    const rHint = $("#n-read-hint", body);
-    rHint.textContent = "Okunuyor…";
-    rHint.className = "field-hint";
-    try {
-      const text = await scanText();
-      if (text == null) { rHint.textContent = "Okuma iptal edildi."; return; }
-      const r = extractLabel(text, bilinenKodlar, "MEA");
-
-      if (r.chassis) {
-        chIn.value = r.chassis;
-        const uyari = sasiUyari(r.chassis, "MEA");
-        chHint.textContent = uyari
-          ? "Okundu: " + r.chassis + " — " + uyari
-          : "Okundu: " + r.chassis + " — etiketle bir kez karşılaştırın.";
-        chHint.className = "field-hint " + (uyari ? "hint-err" : "hint-ok");
-      } else {
-        // Motor numarasından parça kesip şasi uydurmaktansa boş bırakırız.
-        chHint.textContent = "Şasi okunamadı — 17 haneyi elle yazın. " +
-          "(Etiketteki 22 haneli numara motor numarasıdır, şasi değil.)";
-        chHint.className = "field-hint hint-err";
-      }
-
-      if (r.saleCode) {
-        scIn.value = r.saleCode;
-        const tanidik = bilinenKodlar.indexOf(r.saleCode) !== -1;
-        scHint.textContent = tanidik
-          ? "Okundu: " + r.saleCode + " — daha önce kullanılmış bir kod."
-          : "Okundu: " + r.saleCode + " — bu kod ilk kez kullanılıyor, kontrol edin.";
-        scHint.className = "field-hint " + (tanidik ? "hint-ok" : "");
-      } else if (!scIn.value) {
-        scHint.textContent = "Satış kodu okunamadı, elle yazın.";
-        scHint.className = "field-hint hint-err";
-      }
-
-      rHint.textContent = (r.chassis && r.saleCode)
-        ? "İkisi de okundu. Kontrol edip kaydedin."
-        : "Eksik kalan alanı elle tamamlayın ya da daha yakından tekrar çekin.";
-      if (!r.chassis) chIn.focus();
-    } catch (e) { err(e); rHint.textContent = "Okunamadı: " + ((e && e.message) || ""); }
-    finally { readBtn.disabled = false; }
-  };
+  // Aynı şasiyi ikinci kez açmak, iki ayrı traktör kaydına bölünmüş bir
+  // geçmiş demek: adımların yarısı birinde, yarısı ötekinde kalır ve
+  // hiçbir rapor doğru çıkmaz. Kaydet'e basmadan ÖNCE söylemek gerekir.
+  let mevcut = null;
+  function sasiKontrol() {
+    const ch = normChassis(chIn.value);
+    mevcut = ch.length >= 3
+      ? data.tractors.find(function (t) { return t.chassisNo === ch; }) || null
+      : null;
+    if (mevcut) {
+      const adim = stepById(mevcut.currentStepId);
+      chHint.textContent = "Bu şasi zaten kayıtlı — " +
+        (mevcut.status === "sevk_edildi" ? "sevk edilmiş"
+          : mevcut.status === "sevke_hazir" ? "sevke hazır bekliyor"
+          : adim ? adim.code + " adımında" : "hatta") +
+        ". Yeni kayıt açılamaz; listeden o traktörü açın.";
+      chHint.className = "field-hint hint-err";
+    } else if (ch.length && ch.length < 3) {
+      chHint.textContent = "Şasi no en az 3 karakter olmalı.";
+      chHint.className = "field-hint hint-err";
+    } else {
+      chHint.textContent = "Etiketteki 17 haneli numara. Yazarken daha önce " +
+        "kayıtlı olup olmadığı kontrol edilir.";
+      chHint.className = "field-hint";
+    }
+  }
+  chIn.oninput = sasiKontrol;
+  sasiKontrol();
 
   modal({
     title: "Yeni Traktör", body: body,
@@ -1075,6 +1049,10 @@ function newTractorDialog(onDone, presetChassis) {
         // Aynı sonla biten bir traktör zaten hattaysa büyük ihtimalle aynı
         // traktör: operatör 6 haneyi, öbürü tamamını yazmış olabilir.
         const ch = normChassis(chIn.value);
+        if (mevcut) {
+          toast("Bu şasi zaten kayıtlı. Listeden o traktörü açın.", "err");
+          return "keep";
+        }
         const benzer = findTractors(ch.length > 6 ? ch.slice(-6) : ch, 3).filter(function (t) {
           return t.chassisNo !== ch && t.status !== "sevk_edildi";
         });
