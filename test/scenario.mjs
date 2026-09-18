@@ -4,7 +4,7 @@
 // makinede aynı dosya tarayıcı konsolunda da çalıştırılabilir.
 
 export async function runScenario(ctx) {
-  const { flow, data, store, util, V, scan, ui, photos, stepUsage, renumberSteps, seed, mock, sleep, waitFor } = ctx;
+  const { flow, data, store, util, V, scan, ui, photos, stepUsage, renumberSteps, seed, seedData, mock, sleep, waitFor } = ctx;
   const results = [];
   const check = function (name, cond, extra) {
     results.push({ name: name, ok: !!cond, extra: cond ? "" : String(extra == null ? "" : extra) });
@@ -27,7 +27,7 @@ export async function runScenario(ctx) {
   check("Hata kataloğu Excel'den dolu (2000+ tanım)", data.catalog.length >= 2000, data.catalog.length);
   check("Katalog sık kullanılan önce sıralı", data.catalog[0].d === "Oil flashing", data.catalog[0]);
 
-  /* ---------- 1b. Yazdıkça öneri (Excel süzgeci gibi) ---------- */
+  /* ---------- 1b. Yazdıkça öneri (Excel süzgeçi gibi) ---------- */
   const { searchCatalog, catalogFind, catalogRemember, findTractors } = store;
   const oil = searchCatalog("oil", null, 5);
   check("'oil' yazınca Oil flashing önerilir", oil.length && oil[0].d === "Oil flashing", oil.map(function (i) { return i.d; }));
@@ -141,7 +141,7 @@ export async function runScenario(ctx) {
   const n0 = (catalogFind("Oil flashing") || {}).n;
   await catalogRemember("oil flashing", "Tanımlı İş", null);
   await waitFor(function () { return (catalogFind("Oil flashing") || {}).n === n0 + 1; });
-  check("Var olan tanım tekrar yazılınca sayaç artar (kopya oluşmaz)",
+  check("Var olan tanım tekrar yazılınca sayacı artar (kopya oluşmaz)",
         (catalogFind("Oil flashing") || {}).n === n0 + 1 && data.catalog.length === before + 1);
 
   /* ---------- 4c. Şasi arama: son 6 hane ---------- */
@@ -946,6 +946,132 @@ export async function runScenario(ctx) {
     }
   }
 
+  /* ---------- 17b. Kayıt noktası (C-3 / C-5) ----------
+     İş yapılmayan istasyonlar: traktör sadece teslim alınır, varsa hatası
+     yazılır. Başlat + Tamamla iki dokunuş demekti; burada tek dokunuş olmalı.
+     İlk adım kayıt noktasıysa traktör kaydı açılır açılmaz adım kapanmalı —
+     yoksa bütün traktörler C-3'te birikirdi. */
+  {
+    mock.signInAs("admin@test.local", "Yönetici");
+    await sleep(15);
+
+    check("Kayıt Noktası adım türü tanımlı",
+          seedData.KIND_LABEL.kayit === "Kayıt Noktası" && !!seedData.KIND_COLOR.kayit,
+          [seedData.KIND_LABEL.kayit, seedData.KIND_COLOR.kayit]);
+    check("isRecordStep yalnızca kayit türünü tanıyor",
+          flow.isRecordStep({ kind: "kayit" }) === true &&
+          flow.isRecordStep({ kind: "kontrol" }) === false &&
+          flow.isRecordStep(null) === false);
+
+    const rdcS = data.steps.find(function (s) { return s.code === "RDC"; });
+    const eskiTur = rdcS.kind;
+    // Adımlar tek bir config/steps belgesinde dizi olarak duruyor.
+    const turDegistir = async function (kod, tur) {
+      const items = data.steps.map(function (x) {
+        return x.code === kod
+          ? Object.assign({}, x, { kind: tur, color: seedData.KIND_COLOR[tur] || x.color })
+          : x;
+      });
+      await store.saveDoc("config", "steps", { items: items });
+      await waitFor(function () {
+        const y = data.steps.find(function (x) { return x.code === kod; });
+        return y && y.kind === tur;
+      });
+    };
+    await turDegistir("RDC", "kayit");
+    check("Adım türü kayıt noktasına çevrildi",
+          (data.steps.find(function (x) { return x.code === "RDC"; }) || {}).kind === "kayit");
+
+    const CHK = "TESTKAYIT0001";
+    const tidK = await flow.createTractor({ chassisNo: CHK, saleCode: "GX626B" });
+    await waitFor(function () {
+      const t = data.tractors.find(function (x) { return x.id === tidK; });
+      return t && t.steps && t.steps.RDC;
+    });
+    const tK = data.tractors.find(function (x) { return x.id === tidK; });
+    check("Kayıt noktası ilk adımsa kayıtla birlikte kendiliğinden kapanıyor",
+          !!(tK.steps.RDC && tK.steps.RDC.result === "ok"), tK.steps.RDC);
+    check("Traktör kayıt noktasında beklemiyor, sıradaki adıma geçti",
+          tK.currentStepId !== rdcS.id, tK.currentStepId);
+    check("Kayıt noktası için de olay kaydı açık",
+          !!tK.currentEventId, tK.currentEventId);
+
+    // Ekranda tek düğme: "✓ Devraldım". Başlat düğmesi olmamalı.
+    const rdcYeni = data.steps.find(function (x) { return x.id === rdcS.id; });
+    await flow.moveToStep(tidK, rdcYeni.id, "test: kayıt noktasına geri");
+    await waitFor(function () {
+      const t = data.tractors.find(function (x) { return x.id === tidK; });
+      return t && t.currentStepId === rdcYeni.id && !t.currentStartedAt;
+    });
+
+    const viewK = document.createElement("div");
+    document.body.appendChild(viewK);
+    const cizK = function () { viewK.innerHTML = ""; V.istasyon(viewK, [], function () {}); };
+    // Önceki bölümlerden kalan istasyon/arama seçimini temizle.
+    const temizle = function () {
+      cizK();
+      const clr = viewK.querySelector("#st-clear");
+      if (clr) { clr.onclick(); cizK(); }
+      const pick = viewK.querySelector("#st-pick");
+      if (pick) { pick.value = "RDC"; pick.onchange(); cizK(); }
+    };
+    temizle();
+    const satirK = viewK.querySelector('[data-sel="' + tidK + '"]');
+    check("Kayıt noktası kuyruğunda traktör görünüyor", !!satirK,
+          (viewK.textContent || "").slice(0, 160));
+    if (satirK) satirK.click();
+    cizK();
+    check("Kayıt noktasında 'Adımı Başlat' düğmesi YOK",
+          !viewK.querySelector("#stp-start"));
+    check("Kayıt noktasında tek düğme var ve 'Devraldım' yazıyor",
+          !!viewK.querySelector("#stp-finish") &&
+          (viewK.querySelector("#stp-finish").textContent || "").indexOf("Devraldım") !== -1,
+          viewK.querySelector("#stp-finish") &&
+          viewK.querySelector("#stp-finish").textContent);
+
+    // Tek dokunuşla kapanıyor mu? (startWork çağrılmadan)
+    const btnK = viewK.querySelector("#stp-finish");
+    if (btnK) btnK.click();
+    await waitFor(function () {
+      const t = data.tractors.find(function (x) { return x.id === tidK; });
+      return t && t.currentStepId !== rdcYeni.id;
+    });
+    check("Tek dokunuşla adım kapandı (önce Başlat gerekmiyor)",
+          data.tractors.find(function (x) { return x.id === tidK; }).currentStepId !== rdcYeni.id);
+
+    // Traktör detayında da aynı davranış.
+    await flow.moveToStep(tidK, rdcYeni.id, "test: kayıt noktasına geri 2");
+    await waitFor(function () {
+      const t = data.tractors.find(function (x) { return x.id === tidK; });
+      return t && t.currentStepId === rdcYeni.id;
+    });
+    const viewD = document.createElement("div");
+    document.body.appendChild(viewD);
+    await V.traktor(viewD, [tidK], function () {});
+    check("Traktör detayında da kayıt noktası tek düğme",
+          !viewD.querySelector("#st-start") && !!viewD.querySelector("#st-finish") &&
+          (viewD.querySelector("#st-finish").textContent || "").indexOf("Devraldım") !== -1,
+          viewD.querySelector("#st-finish") && viewD.querySelector("#st-finish").textContent);
+    viewK.remove(); viewD.remove();
+
+    // Tanımlar ekranındaki tür listesinde de görünmeli.
+    check("Adım tanımı türleri arasında Kayıt Noktası var",
+          Object.keys(seedData.KIND_LABEL).indexOf("kayit") !== -1,
+          Object.keys(seedData.KIND_LABEL).join(","));
+
+    // Kayıt noktası olmayan adımlarda iki aşama korunuyor.
+    await turDegistir("RDC", eskiTur);
+    const viewN = document.createElement("div");
+    document.body.appendChild(viewN);
+    const cizN = function () { viewN.innerHTML = ""; V.istasyon(viewN, [], function () {}); };
+    cizN();
+    const satirN = viewN.querySelector('[data-sel="' + tidK + '"]');
+    if (satirN) satirN.click();
+    cizN();
+    check("Normal adımda 'Adımı Başlat' geri geliyor", !!viewN.querySelector("#stp-start"));
+    viewN.remove();
+  }
+
   /* ---------- 18. Yetki matrisi ----------
      8 istasyon + yönetici. Her rolün neyi YAPABİLDİĞİ ve neyi
      YAPAMADIĞI tek tabloda. Bir rol fazladan yetki kazanırsa burası düşer. */
@@ -996,7 +1122,9 @@ export async function runScenario(ctx) {
     const c3 = bul("C-3 / Üretim"), rdc = bul("RDC / Kalite");
     const rw1 = bul("RW-1 / Rework"), yon = bul("Yönetim");
 
-    check("Üretim operatörü hata kaydı AÇAMAZ", c3.hataAc !== "YAPABİLİR", c3.hataAc);
+    // C-3/C-5 kayıt noktalarında traktörü teslim alan üretim arkadaşı gördüğü
+    // kusuru oracıkta yazabilmeli; hatayı kapatmak yine kalitenin işi.
+    check("Üretim operatörü hata kaydı açabilir", c3.hataAc === "YAPABİLİR", c3.hataAc);
     check("Kalite kontrolör hata kaydı açabilir", rdc.hataAc === "YAPABİLİR", rdc.hataAc);
     check("Rework operatörü hata kaydı AÇAMAZ", rw1.hataAc !== "YAPABİLİR", rw1.hataAc);
     check("Yönetim (sadece rapor) traktör AÇAMAZ", yon.traktorAc !== "YAPABİLİR", yon.traktorAc);
