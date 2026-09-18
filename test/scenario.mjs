@@ -27,7 +27,7 @@ export async function runScenario(ctx) {
   check("Hata kataloğu Excel'den dolu (2000+ tanım)", data.catalog.length >= 2000, data.catalog.length);
   check("Katalog sık kullanılan önce sıralı", data.catalog[0].d === "Oil flashing", data.catalog[0]);
 
-  /* ---------- 1b. Yazdıkça öneri (Excel süzgeçi gibi) ---------- */
+  /* ---------- 1b. Yazdıkça öneri (Excel süzgeci gibi) ---------- */
   const { searchCatalog, catalogFind, catalogRemember, findTractors } = store;
   const oil = searchCatalog("oil", null, 5);
   check("'oil' yazınca Oil flashing önerilir", oil.length && oil[0].d === "Oil flashing", oil.map(function (i) { return i.d; }));
@@ -141,7 +141,7 @@ export async function runScenario(ctx) {
   const n0 = (catalogFind("Oil flashing") || {}).n;
   await catalogRemember("oil flashing", "Tanımlı İş", null);
   await waitFor(function () { return (catalogFind("Oil flashing") || {}).n === n0 + 1; });
-  check("Var olan tanım tekrar yazılınca sayacı artar (kopya oluşmaz)",
+  check("Var olan tanım tekrar yazılınca sayaç artar (kopya oluşmaz)",
         (catalogFind("Oil flashing") || {}).n === n0 + 1 && data.catalog.length === before + 1);
 
   /* ---------- 4c. Şasi arama: son 6 hane ---------- */
