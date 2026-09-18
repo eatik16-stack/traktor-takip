@@ -141,7 +141,7 @@ export async function runScenario(ctx) {
   const n0 = (catalogFind("Oil flashing") || {}).n;
   await catalogRemember("oil flashing", "Tanımlı İş", null);
   await waitFor(function () { return (catalogFind("Oil flashing") || {}).n === n0 + 1; });
-  check("Var olan tanım tekrar yazılınca sayacı artar (kopya oluşmaz)",
+  check("Var olan tanım tekrar yazılınca sayaç artar (kopya oluşmaz)",
         (catalogFind("Oil flashing") || {}).n === n0 + 1 && data.catalog.length === before + 1);
 
   /* ---------- 4c. Şasi arama: son 6 hane ---------- */
@@ -652,7 +652,7 @@ export async function runScenario(ctx) {
     check("Fotoğrafta harf karışırsa bilinen koda düzeltilir",
           scan.extractSaleCode("MODEL GX72IF1 SERIAL", bilinen) === "GX721F1",
           scan.extractSaleCode("MODEL GX72IF1 SERIAL", bilinen));
-    check("Satış kodu yoksa uydurulmuyor".replace("uydurulmuyor", "uydurulmaz"),
+    check("Satış kodu yoksa uydurulmaz",
           scan.extractSaleCode("BURADA KOD YOK", []) === null,
           scan.extractSaleCode("BURADA KOD YOK", []));
     check("Fotoğraftan şasi 17 haneden bulunur",
