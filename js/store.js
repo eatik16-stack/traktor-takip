@@ -338,6 +338,8 @@ export async function readEvents(tractorId) {
 export async function grantAccess(email, name, roles, stepCode) {
   const mail = String(email || "").trim().toLowerCase();
   const adi = String(name || "").trim();
+  // Kayıttan ÖNCEKİ ad: yalnızca gerçekten değiştiyse eski kayıtlar taranır.
+  const onceki = data.allowed.find(function (u) { return u.email === mail; }) || null;
   await setDocFull("allowed", mail, {
     name: adi,
     roles: roles || [],
@@ -349,6 +351,12 @@ export async function grantAccess(email, name, roles, stepCode) {
   // Ad her kaydedilişinde eski kayıtlardaki kopyalarıyla eşitlenir; yoksa bir
   // yazım hatası düzeltildikten sonra ekranlarda eski ad kalırdı. Değişecek
   // bir şey yoksa hiçbir yazma yapmaz.
+  //
+  // Tarama pahalıdır: bütün traktörleri, hataları ve her traktörün adım
+  // geçmişini okur. Eskiden rol ya da istasyon değişikliğinde de çalışıyordu;
+  // kayıt sayısı büyüdükçe her "Kaydet" binlerce okuma demekti. Ad aynıysa
+  // eşitlenecek bir şey yoktur, tarama atlanır.
+  if (onceki && String(onceki.name || "").trim() === adi) return;
   try { await renameEverywhere(mail, adi); } catch (e) { console.error(e); }
 }
 

@@ -1135,5 +1135,92 @@ export async function runScenario(ctx) {
     results.__matris = matris;
   }
 
+  /* ---------- Kasım 2026: rapor eklemeleri, grafikler, simgeler, şema ---------- */
+  {
+    mock.signInAs("admin@test.local", "Yönetici");
+    await sleep(20);
+    const r7 = ctx.buildReport(7), r90 = ctx.buildReport(90);
+    check("Günlük eğilim dönemdeki her günü içeriyor (7 gün → 7 sütun)",
+          r7.trend.length === 7 && r7.trendWeekly === false, r7.trend.length);
+    check("Eğilimdeki traktör toplamı Üretilen kartını tutuyor",
+          r7.trend.reduce(function (n, x) { return n + x.a; }, 0) === r7.kpi.produced,
+          r7.trend.map(function (x) { return x.a; }).join("+") + " ≠ " + r7.kpi.produced);
+    check("Eğilimdeki hata toplamı Toplam Hata kartını tutuyor",
+          r7.trend.reduce(function (n, x) { return n + x.b; }, 0) === r7.kpi.defectsTotal,
+          r7.kpi.defectsTotal);
+    check("31 günden uzun dönem haftalara toplanıyor ve toplam değişmiyor",
+          r90.trendWeekly === true && r90.trend.length <= 14 &&
+          r90.trend.reduce(function (n, x) { return n + x.a; }, 0) === r90.kpi.produced,
+          r90.trend.length);
+    check("En sık hatalar sıralı, en çok 10 satır ve toplamı aşmıyor",
+          r90.topDefects.length <= 10 &&
+          r90.topDefects.every(function (x, i, a) { return !i || a[i - 1].a >= x.a; }) &&
+          r90.topDefects.reduce(function (n, x) { return n + x.a; }, 0) <= r90.kpi.defectsTotal,
+          JSON.stringify(r90.topDefects.slice(0, 3)));
+    check("Rework yapanlarda ortalama süre alanı var (sayı ya da boş)",
+          r90.reworkers.every(function (x) { return x.avgMinutes === null || x.avgMinutes >= 0; }));
+
+    const hedefli = ui.barChart([{ label: "RDC", a: 30, b: 40, target: 45, note: "5 traktör" },
+                                 { label: "OIL", a: 5, b: 5, target: 45 }], "Bekleme", "İşlem", " dk");
+    check("Hedefi aşan istasyon yalnızca renkle değil simge ve açıklamayla işaretli",
+          (hedefli.match(/bar-val over/g) || []).length === 1 &&
+          hedefli.indexOf("Hedefin üstünde") !== -1 && hedefli.indexOf("<svg") !== -1 &&
+          (hedefli.match(/bar-target/g) || []).length === 2);
+    check("Hedefsiz grafikte hedef çizgisi ve açıklaması yok",
+          ui.barChart([{ label: "x", a: 3 }], "Adet", null, "").indexOf("bar-target") === -1);
+    const tr = ui.trendChart([{ label: "01.11", a: 3, b: 5 }, { label: "02.11", a: 0, b: 0 }], "Traktör", "Hata");
+    check("Eğilim grafiği SVG çiziyor, sıfır değer için sütun çizmiyor",
+          tr.indexOf("<svg") !== -1 && (tr.match(/<rect/g) || []).length === 2 && tr.indexOf("NaN") === -1);
+    check("Boş eğilim grafiği 'veri yok' diyor", ui.trendChart([], "a", "b").indexOf("Veri yok") !== -1);
+
+    const ic = ctx.icons;
+    check("Gezinme simgelerinin hepsi tanımlı",
+          ["sema", "istasyon", "rework", "onay", "traktorler", "hatalar", "rapor", "onaysiz", "talepler", "tanimlar"]
+            .every(function (n) { return ic.icon(n).indexOf("<svg") === 0; }));
+    check("Bilinmeyen simge adı ekranı bozmuyor (boş döner)", ic.icon("yok-boyle-bir-sey") === "");
+
+    // Canlı Şema: akış şeridi ve kısa şasi
+    const viewC = document.createElement("div");
+    document.body.appendChild(viewC);
+    V.sema(viewC);
+    const hatta = data.tractors.filter(function (t) { return t.status === "devam" || t.status === "beklemede"; });
+    const seritToplam = Array.prototype.reduce.call(viewC.querySelectorAll(".flow-n"),
+      function (n, x) { return n + Number(x.textContent); }, 0);
+    const tanimliAdimda = hatta.filter(function (t) {
+      return data.steps.some(function (s) { return s.active !== false && s.id === t.currentStepId; });
+    }).length;
+    check("Akış şeridindeki sayıların toplamı hattaki traktör sayısını tutuyor",
+          seritToplam === tanimliAdimda, seritToplam + " ≠ " + tanimliAdimda);
+    check("Şemadaki her traktör kartı klavyeyle de açılabilen bir düğme",
+          Array.prototype.every.call(viewC.querySelectorAll(".bchip"), function (n) { return n.tagName === "BUTTON"; }));
+    const acikli = viewC.querySelector(".bchip.bad");
+    check("Açık hatalı traktör renkle birlikte yazıyla da işaretli",
+          !acikli || (acikli.textContent || "").indexOf("açık") !== -1);
+    viewC.remove();
+  }
+
+  /* ---------- Ad eşitleme taraması yalnızca ad değişince çalışır ---------- */
+  {
+    // Tarama, koleksiyonların tamamını okur (getDocs). Okuma sayısı sayılır.
+    const M = window.__TT_MOCK__;
+    const asil = M.getDocs;
+    let okuma = 0;
+    M.getDocs = function () { okuma++; return asil.apply(M, arguments); };
+    try {
+      const ben = data.allowed.find(function (u) { return u.email === "admin@test.local"; });
+      await store.grantAccess("admin@test.local", ben.name, ben.roles, "RUN");
+      await sleep(40);
+      const sonra = data.allowed.find(function (u) { return u.email === "admin@test.local"; });
+      check("Ad değişmeden yapılan kayıt istasyonu güncelliyor, eski kayıtları TARAMIYOR",
+            sonra.stepCode === "RUN" && okuma === 0, sonra.stepCode + " / " + okuma + " okuma");
+      okuma = 0;
+      await store.grantAccess("admin@test.local", ben.name + " X", ben.roles, ben.stepCode || "RDC");
+      await sleep(40);
+      check("Ad değişince eski kayıtlar taranıyor", okuma > 0, okuma);
+      await store.grantAccess("admin@test.local", ben.name, ben.roles, ben.stepCode || "RDC");
+      await sleep(40);
+    } finally { M.getDocs = asil; }
+  }
+
   return results;
 }

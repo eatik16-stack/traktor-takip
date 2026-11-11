@@ -150,6 +150,8 @@ rapora girmez.
 
 ```
 index.html              uygulama kabuğu
+sw.js                   servis çalışanı: kabuğu çevrimdışı açılabilir kılar
+manifest.webmanifest    ana ekrana ekleme (tam ekran, simge)
 assets/app.css          tasarım sistemi (renk yalnızca durum için)
 js/config.js            Firebase bağlantı değerleri + sürüm damgası
 js/fb.js                SDK yükleme — sürüm tek yerde
@@ -158,13 +160,47 @@ js/roles.js             roller: hangi rol hangi ekranı görür
 js/store.js             Firestore okuma/yazma + denetim kaydı
 js/flow.js              iş kuralları: adım akışı, hata akışı, onay
 js/seed.js              11 adım, Excel'den 2.347 hazır hata tanımı, listeler, beklenen kişiler
-js/ui.js                pencere, onay, KPI kartı, çubuk grafik
+js/ui.js                pencere, onay, KPI kartı, çubuk ve eğilim grafiği
+js/icons.js             satır içi SVG simgeler ve uygulama işareti
 js/views.js             operasyon ekranları
 js/views-admin.js       rapor, talepler, tanımlar
 js/app.js               yönlendirme, gezinme, giriş ekranı
 firestore.rules         yetki kuralları (Console'a yapıştırılıp yayınlanır)
+storage.rules           fotoğraf deposu kuralları (Console → Storage → Rules)
 test/                   sahte Firebase ile uçtan uca test
 ```
+
+## Bağlantı kesilince ve güncelleme gelince
+
+**Çevrimdışı açılış.** Firestore verileri cihazda saklanıyordu ama sayfanın
+kendisi saklanmıyordu: Wi-Fi yokken tablet yeniden başlarsa uygulama hiç
+açılmıyordu. `sw.js` uygulama dosyalarını cihazda tutar. Kural: kendi
+dosyalarımız **önce ağdan** gelir (bağlantı varken her zaman son sürüm), yalnızca
+ağ yokken saklanan kopya kullanılır. Firestore, giriş ve dosya deposu
+isteklerine dokunmaz.
+
+**Yeni sürüm bildirimi.** Uygulama 10 dakikada bir sunucudaki sürüm damgasına
+bakar. Fark varsa: kişi çalışıyorsa "Yeni sürüm hazır — Yenile" şeridi çıkar;
+tablet boştaysa (pencere açık değil, 3 dakikadır dokunulmamış, bekleyen kayıt
+yok) kendiliğinden yenilenir. Yarım kalmış bir hata kaydı zorla silinmez.
+
+**Ana ekrana ekleme.** İstasyon tabletinde tarayıcı menüsünden "Ana ekrana
+ekle" seçilirse uygulama adres çubuğu olmadan, tam ekran açılır.
+
+**Canlı ekranlar yazıyı bozmaz.** Başka bir istasyondan kayıt geldiğinde ekran
+yeniden çizilir; yazı yazılan alanın içeriği ve imleci korunur. Art arda gelen
+değişiklikler tek çizimde toplanır.
+
+## Görsel dil
+
+- Simgeler emoji değil, satır içi SVG (`js/icons.js`): her cihazda aynı çizilir,
+  yazının rengini alır.
+- Yazı ve düğme mavisi `--blue-ink` (#1c5fb8, beyazla 6,2:1). `--blue` yalnızca
+  grafik çubuklarında kalır. İkincil yazı `--muted` gri zeminde 5,5:1.
+- Canlı Şema'da adımın rengi başlığın **zemini değil**, üst şeridi ve sıra
+  rozetidir; başlık yazısı her zaman koyu üstüne açık zemindir.
+- Durum hiçbir yerde yalnızca renkle söylenmez: açık hata ⚠ + "açık",
+  gecikme saat simgesi, bekleme ⏸ + "beklemede".
 
 ## Test
 
@@ -183,8 +219,9 @@ ve işi geri bırakma,
 **dört göz kuralı ve tam_onay yetkisi**, atlanan adım koruması, **akışın sonuna
 adım eklendiğinde kilitlenmeme**, tek kişinin bir traktörü baştan sona
 götürmesi, hata düzenleme/iptal/geri alma yetkileri, hatanın başka traktöre
-taşınması, şasi numarası düzeltme, denetim kaydının eksiksizliği ve **rapor
-kartlarının beş ayrı dönemde birbirini tutması**.
+taşınması, şasi numarası düzeltme, denetim kaydının eksiksizliği, **rapor
+kartlarının beş ayrı dönemde birbirini tutması**, eğilim grafiği toplamlarının
+kartlarla tutması, hedef çizgili grafik, simge seti ve Canlı Şema akış şeridi.
 
 Sahte Firebase `firestore.rules` kurallarını uygulamaz; kural katmanındaki
 kilitler bu testlerle değil, Firebase Console → Firestore → Rules →
@@ -214,9 +251,12 @@ Tek kaynak bu depo.
    **testler geçmeden teslim edilmez**.
 3. Claude değişiklikleri doğrudan bu depoya yazar; GitHub Pages birkaç dakika
    içinde yayına alır.
-4. `firestore.rules` değiştiyse içeriği Firebase Console → Firestore → Rules'a
+4. `firestore.rules` değiştiyse içeriği Firebase Console → Firestore → Rules'a,
+   `storage.rules` değiştiyse Firebase Console → Storage → Rules'a
    yapıştırılıp **Publish** edilir. (Kural değişikliği seyrektir; gerektiğinde
    Claude ayrıca söyler.)
 
 Ekranın sol alt köşesindeki **sürüm damgası** her güncellemede değişir:
-"güncelleme bu tablete ulaştı mı?" sorusunun cevabı oradadır.
+"güncelleme bu tablete ulaştı mı?" sorusunun cevabı oradadır. Açık kalan
+tabletler yeni sürümü kendileri fark eder (bkz. *Bağlantı kesilince ve
+güncelleme gelince*).

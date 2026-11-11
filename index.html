@@ -7,7 +7,13 @@
   <meta name="mobile-web-app-capable" content="yes">
   <title>Traktör Takip Sistemi</title>
   <link rel="stylesheet" href="assets/app.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚜</text></svg>">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Traktör Takip">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- Ana ekrana eklenebilir: istasyon tableti adres çubuğu olmadan, tam ekran açılır. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 </head>
 <body>
 
@@ -15,7 +21,7 @@
 <div id="login" class="login" hidden>
   <div class="login-card">
     <div class="login-brand">
-      <span class="login-logo">🚜</span>
+      <span class="login-logo" data-logo="52"></span>
       <div>
         <h1>Traktör Takip Sistemi</h1>
         <p id="login-plant">TAFE Manisa</p>
@@ -28,7 +34,7 @@
 <!-- ======================= UYGULAMA ======================= -->
 <div id="app" hidden>
   <header class="topbar">
-    <span class="topbar-logo">🚜</span>
+    <span class="topbar-logo" data-logo="34"></span>
     <div class="topbar-title">
       <strong>Traktör Takip</strong>
       <small id="topbar-sub">TAFE Manisa</small>
@@ -38,7 +44,7 @@
       <span id="user-name"></span>
       <small id="user-roles"></small>
     </div>
-    <button class="btn btn-ghost btn-sm" id="logout-btn" style="color:#fff">Çıkış</button>
+    <button class="topbar-btn" id="logout-btn" aria-label="Çıkış">Çıkış</button>
   </header>
 
   <div class="app-body">

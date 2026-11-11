@@ -8,6 +8,7 @@ import { data, stepById, stepByCode, activeSteps, tractorById, tractorByChassis,
 import { myStepCode, can, canExact, myEmail } from "./auth.js";
 import * as flow from "./flow.js";
 import { photoPicker, yukleVeBagla, photoStrip, bindPhotos } from "./photo-ui.js";
+import { icon } from "./icons.js";
 
 export function go(hash) { location.hash = hash; }
 
@@ -80,6 +81,17 @@ export function sema(view) {
   steps.forEach(function (s) { byStep[s.id] = []; });
   inFlight.forEach(function (t) { if (byStep[t.currentStepId]) byStep[t.currentStepId].push(t); });
 
+  // Her adım için: kaç traktör, kaçında açık hata, kaçı hedefi aşmış.
+  const ozet = {};
+  steps.forEach(function (s) {
+    const list = byStep[s.id] || [];
+    ozet[s.id] = {
+      n: list.length,
+      bad: list.filter(function (t) { return flow.openDefects(t.id).length; }).length,
+      late: list.filter(flow.isOverdue).length
+    };
+  });
+
   view.innerHTML =
     '<div class="page-head"><div><h2>Canlı Şema</h2>' +
       "<p>Hattaki traktörlerin şu anda hangi adımda olduğu</p></div></div>" +
@@ -89,27 +101,61 @@ export function sema(view) {
       kpi("Açık Hatalı", fmtNum(withDefects), "traktör", withDefects ? "k-red" : "k-green") +
       kpi("Hedefi Aşan", fmtNum(late), "traktör", late ? "k-amber" : "k-green") +
     "</div>" +
+
+    // Akış şeridi: hattın tamamı tek bakışta. Dokununca o adımın kartına iner.
+    '<div class="flow" role="list" aria-label="Adımlara göre traktör sayısı">' + steps.map(function (s) {
+      const o = ozet[s.id];
+      return '<button class="flow-step' + (o.n ? "" : " is-zero") + '" role="listitem" data-jump="' + esc(s.id) + '" ' +
+        'title="' + esc(s.seq + ". " + s.name) + '" aria-label="' +
+          esc(s.name + ": " + o.n + " traktör" + (o.bad ? ", " + o.bad + " açık hatalı" : "") +
+              (o.late ? ", " + o.late + " hedefi aşmış" : "")) + '">' +
+        '<span class="flow-n">' + o.n + "</span>" +
+        '<span class="flow-code"><i style="background:' + esc(s.color || "#2563eb") + '"></i>' + esc(s.code) + "</span>" +
+        (o.bad ? '<span class="flow-flag">' + icon("uyari", 12) + o.bad + " hatalı</span>"
+          : o.late ? '<span class="flow-flag is-late">' + icon("saat", 12) + o.late + " gecikmiş</span>"
+          : '<span class="flow-flag"></span>') +
+        "</button>";
+    }).join("") + "</div>" +
+
     '<div class="board">' + steps.map(function (s) {
-      const list = byStep[s.id] || [];
-      return '<div class="bstep">' +
-        '<div class="bstep-head" style="background:' + esc(s.color || "#2563eb") + '">' +
+      const list = (byStep[s.id] || []).slice().sort(function (a, b) {
+        // En uzun bekleyen üstte: önce ilgilenilmesi gereken o.
+        return flow.minutesHere(b) - flow.minutesHere(a);
+      });
+      return '<div class="bstep' + (list.length ? "" : " is-empty") + '" id="bs-' + esc(s.id) + '" ' +
+          'style="--c:' + esc(s.color || "#2563eb") + '">' +
+        '<div class="bstep-head">' +
           '<span class="seq">' + s.seq + "</span>" +
-          '<span class="nm">' + esc(s.name) + "</span>" +
-          '<span class="ct">' + list.length + "</span></div>" +
-        '<div class="bstep-body">' +
-          (list.length ? list.map(function (t) {
+          '<span class="nm">' + esc(s.name) + "<small>" + esc(s.code) + "</small></span>" +
+          '<span class="ct" aria-label="' + list.length + ' traktör">' + list.length + "</span></div>" +
+        (list.length ? '<div class="bstep-body">' + list.map(function (t) {
             const open = flow.openDefects(t.id).length;
-            const cls = open ? "bad" : (flow.isOverdue(t) ? "late" : "");
-            return '<div class="bchip ' + cls + '" data-go="' + esc(t.id) + '">' +
-              '<span class="ch">' + esc(t.chassisNo) + "</span>" +
-              (open ? '<span class="chip chip-red">' + open + "</span>" : "") +
-              '<span class="tm">' + fmtMin(flow.minutesHere(t)) + "</span></div>";
-          }).join("") : '<div class="bstep-empty">boş</div>') +
-        "</div></div>";
+            const gec = flow.isOverdue(t);
+            const bekle = t.status === "beklemede";
+            const cls = open ? "bad" : gec ? "late" : bekle ? "hold" : t.currentStartedAt ? "work" : "";
+            // Durum yalnızca renkle değil, simge ve yazıyla da söylenir.
+            const durum = bekle ? "beklemede" : t.currentStartedAt ? "işlemde" : "sırada";
+            return '<button class="bchip ' + cls + '" data-go="' + esc(t.id) + '" title="' + esc(t.chassisNo) + '">' +
+              '<span class="ch">' + esc(shortChassis(t.chassisNo)) +
+                (t.saleCode ? "<small>" + esc(t.saleCode) + "</small>" : "") + "</span>" +
+              '<span class="tm">' + (gec ? icon("saat", 13) : "") + fmtMin(flow.minutesHere(t)) + "</span>" +
+              '<span class="meta">' + (bekle ? icon("duraklat", 11) + " " : "") + durum +
+                (t.currentOperatorName && t.currentStartedAt ? " · " + esc(t.currentOperatorName) : "") + "</span>" +
+              '<span class="flags">' +
+                (open ? '<span class="chip chip-red">' + icon("uyari", 12) + open + " açık</span>" : "") +
+              "</span></button>";
+          }).join("") + "</div>" : "") +
+        "</div>";
     }).join("") + "</div>";
 
   $$("[data-go]", view).forEach(function (n) {
     n.onclick = function () { go("#/traktor/" + n.dataset.go); };
+  });
+  $$("[data-jump]", view).forEach(function (n) {
+    n.onclick = function () {
+      const hedef = document.getElementById("bs-" + n.dataset.jump);
+      if (hedef) hedef.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
   });
 }
 

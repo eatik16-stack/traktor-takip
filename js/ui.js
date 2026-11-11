@@ -1,6 +1,7 @@
 // Ortak arayüz parçaları: pencere, onay, KPI kartı, durum rozeti, çubuk grafik.
 
 import { $, esc, el, fmtNum } from "./util.js";
+import { icon } from "./icons.js";
 
 /* ---------------- pencere ---------------- */
 
@@ -188,22 +189,84 @@ export function defectChip(s) {
 /* ---------------- çubuk grafik ---------------- */
 
 // rows: [{label, a, b}] — a bekleme, b işlem (iki seri aynı çubukta).
+// Yatay çubuk grafik. Satır: { label, a, b?, target?, note? }
+//   target — varsa çubuğun üstüne hedef çizgisi çizilir; toplam hedefi geçiyorsa
+//            değer turuncu yazılır ve yanına saat simgesi gelir (renk tek başına
+//            durum taşımaz).
+//   note   — değerin altına küçük ek bilgi (örnek sayısı, ortalama süre…).
 export function barChart(rows, labelA, labelB, unit) {
   if (!rows.length) return emptyBox("Veri yok.", "📊");
-  const max = rows.reduce(function (m, r) { return Math.max(m, (r.a || 0) + (r.b || 0)); }, 0) || 1;
+  const max = rows.reduce(function (m, r) {
+    return Math.max(m, (r.a || 0) + (r.b || 0), r.target || 0);
+  }, 0) || 1;
+  const hedefVar = rows.some(function (r) { return r.target; });
   const legend = labelB
     ? '<div class="legend"><span><i style="background:var(--blue)"></i>' + esc(labelA) + "</span>" +
-      '<span><i style="background:var(--orange)"></i>' + esc(labelB) + "</span></div>"
+      '<span><i style="background:var(--orange)"></i>' + esc(labelB) + "</span>" +
+      (hedefVar ? '<span><i class="ln"></i>Hedef süre</span>' : "") + "</div>"
     : "";
   const bars = rows.map(function (r) {
     const a = r.a || 0, b = r.b || 0;
     const total = a + b;
-    return '<div class="bar-row"><span title="' + esc(r.label) + '">' + esc(r.label) + "</span>" +
+    const over = r.target && total > r.target;
+    return '<div class="bar-row"><span title="' + esc(r.label) + '">' + esc(r.label) +
+      (r.note ? '<small style="display:block;color:var(--muted);font-size:11px">' + esc(r.note) + "</small>" : "") + "</span>" +
       '<span class="bar-track">' +
-      '<span class="bar-fill" style="width:' + (100 * a / max) + '%"></span>' +
+      (a ? '<span class="bar-fill" style="width:' + (100 * a / max) + '%"></span>' : "") +
       (b ? '<span class="bar-fill two" style="width:' + (100 * b / max) + '%"></span>' : "") +
+      (r.target ? '<span class="bar-target" style="left:' + Math.min(99.5, 100 * r.target / max) + '%" title="Hedef ' +
+                  fmtNum(r.target) + (unit || "") + '"></span>' : "") +
       "</span>" +
-      '<span class="bar-val">' + fmtNum(Math.round(total)) + (unit || "") + "</span></div>";
+      '<span class="bar-val' + (over ? " over" : "") + '"' +
+        (over ? ' title="Hedefin üstünde (hedef ' + fmtNum(r.target) + (unit || "") + ')"' : "") + ">" +
+        (over ? icon("saat", 13) + " " : "") +
+        fmtNum(Math.round(total)) + (unit || "") + "</span></div>";
   }).join("");
   return legend + '<div class="bars">' + bars + "</div>";
+}
+
+// Günlük eğilim: iki serili sütun grafik (SVG, kütüphanesiz).
+//   rows: [{ label, a, b }]. Renkler çubuk grafikle aynı: mavi / turuncu.
+// Değerler sütunların üstüne yazılır; gün sayısı çok olunca yazı sığmaz,
+// o zaman yalnızca eksen çizgileri kalır ve değer üzerine gelince görünür.
+export function trendChart(rows, labelA, labelB) {
+  if (!rows.length) return emptyBox("Veri yok.", "📊");
+  const W = 720, H = 220, L = 30, R = 8, T = 14, B = 26;
+  const max = Math.max(1, rows.reduce(function (m, r) { return Math.max(m, r.a || 0, r.b || 0); }, 0));
+  // Eksen üst sınırı: 1-2-5 basamaklarına yuvarlanır ki çizgiler tam sayıya denk gelsin.
+  const kaba = max / 4;
+  const us = Math.pow(10, Math.floor(Math.log10(kaba || 1)));
+  const adim = Math.max(1, [1, 2, 5, 10].map(function (k) { return k * us; })
+    .filter(function (v) { return v >= kaba; })[0] || 10 * us);
+  const tepe = Math.ceil(max / adim) * adim;
+  const pw = (W - L - R) / rows.length;
+  const bw = Math.max(2, Math.min(18, pw * 0.36));
+  const y = function (v) { return T + (H - T - B) * (1 - v / tepe); };
+  const yaz = rows.length <= 16;
+  const etiketAdim = Math.ceil(rows.length / 12);
+
+  let g = "";
+  for (let v = 0; v <= tepe + 1e-9; v += adim) {
+    g += '<line class="' + (v === 0 ? "ax" : "gl") + '" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>' +
+         '<text x="' + (L - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + fmtNum(v) + "</text>";
+  }
+  rows.forEach(function (r, i) {
+    const cx = L + pw * (i + 0.5);
+    const a = r.a || 0, b = r.b || 0;
+    const kol = function (v, x, renk, ad) {
+      if (!v) return "";
+      const h = Math.max(1.5, y(0) - y(v));
+      return '<rect x="' + x + '" y="' + (y(0) - h) + '" width="' + bw + '" height="' + h + '" rx="2" fill="' + renk + '">' +
+        "<title>" + esc(r.label + " — " + ad + ": " + fmtNum(v)) + "</title></rect>" +
+        (yaz ? '<text class="vl" x="' + (x + bw / 2) + '" y="' + (y(0) - h - 4) + '" text-anchor="middle">' + fmtNum(v) + "</text>" : "");
+    };
+    g += kol(a, cx - bw - 1, "var(--blue)", labelA) + kol(b, cx + 1, "var(--orange)", labelB);
+    if (i % etiketAdim === 0) {
+      g += '<text x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(r.label) + "</text>";
+    }
+  });
+  return '<div class="legend"><span><i style="background:var(--blue)"></i>' + esc(labelA) + "</span>" +
+    '<span><i style="background:var(--orange)"></i>' + esc(labelB) + "</span></div>" +
+    '<svg class="trend" viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="' +
+      esc(labelA + " ve " + labelB + ", günlere göre") + '">' + g + "</svg>";
 }

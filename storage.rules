@@ -14,15 +14,25 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
+    // Firestore kurallarıyla aynı: doğrulanmamış e-posta/şifre hesabı giremez.
     function girisYapmis() {
-      return request.auth != null && request.auth.token.email != null;
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true;
+    }
+    // Yetki belgesinin kimliği küçük harfli e-postadır (uygulama öyle yazar).
+    function yetkiYolu() {
+      return /databases/(default)/documents/allowed/$(request.auth.token.email.lower());
     }
 
-    // allowed/<eposta> kaydı var mı ve hesap aktif mi?
+    // allowed/<eposta> kaydı var mı ve hesap kapatılmamış mı?
+    // "active" alanı hiç yoksa kişi etkin sayılır: ilk yönetici belgesi elle
+    // açılırken bu alan yazılmıyor ve eski kural (== true) yüzünden yöneticinin
+    // kendisi fotoğraf yükleyemiyor, göremiyordu.
     function izinli() {
       return girisYapmis()
-        && firestore.exists(/databases/(default)/documents/allowed/$(request.auth.token.email))
-        && firestore.get(/databases/(default)/documents/allowed/$(request.auth.token.email)).data.active == true;
+        && firestore.exists(yetkiYolu())
+        && firestore.get(yetkiYolu()).data.get('active', true) != false;
     }
 
     // Hata kaydı fotoğrafları: defects/<hataId>/<dosya>.jpg

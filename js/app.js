@@ -6,7 +6,8 @@ import { session, watchSession, refreshSession, signIn, signInWithPassword, sign
          resetPassword, registerAndRequest, submitRequest, resendVerification,
          myName, myEmail, canSee, isAdmin, can } from "./auth.js";
 import { roleLabels } from "./roles.js";
-import { data, onData, startWatching, stopWatching, watchRequests } from "./store.js";
+import { data, onData, startWatching, stopWatching, watchRequests, net } from "./store.js";
+import { icon, logo } from "./icons.js";
 import * as V from "./views.js";
 import * as A from "./views-admin.js";
 import * as flow from "./flow.js";
@@ -14,16 +15,16 @@ import * as flow from "./flow.js";
 /* ---------------- ekranlar ---------------- */
 
 const NAV = [
-  { id: "sema",       label: "Canlı Şema",        icon: "🗺️", tab: true },
-  { id: "istasyon",   label: "İstasyonum",        icon: "🎯", tab: true },
-  { id: "rework",     label: "Rework",            icon: "🔧", tab: true, badge: "rework" },
-  { id: "onay",       label: "Onay Bekleyenler",  icon: "✅", tab: true, badge: "onay" },
-  { id: "traktorler", label: "Traktörler",        icon: "🚜" },
-  { id: "hatalar",    label: "Hata Kayıtları",    icon: "⚠️" },
-  { id: "rapor",      label: "Yönetim Raporu",    icon: "📊", sec: "Raporlama" },
-  { id: "onaysiz",    label: "Onaysız Traktörler",icon: "⏳" },
-  { id: "talepler",   label: "Erişim Talepleri",  icon: "📬", sec: "Sistem", badge: "talep" },
-  { id: "tanimlar",   label: "Tanımlar",          icon: "⚙️" }
+  { id: "sema",       label: "Canlı Şema",        icon: "sema", tab: true },
+  { id: "istasyon",   label: "İstasyonum",        icon: "istasyon", tab: true },
+  { id: "rework",     label: "Rework",            icon: "rework", tab: true, badge: "rework" },
+  { id: "onay",       label: "Onay Bekleyenler",  icon: "onay", tab: true, badge: "onay" },
+  { id: "traktorler", label: "Traktörler",        icon: "traktorler" },
+  { id: "hatalar",    label: "Hata Kayıtları",    icon: "hatalar" },
+  { id: "rapor",      label: "Yönetim Raporu",    icon: "rapor", sec: "Raporlama" },
+  { id: "onaysiz",    label: "Onaysız Traktörler",icon: "onaysiz" },
+  { id: "talepler",   label: "Erişim Talepleri",  icon: "talepler", sec: "Sistem", badge: "talep" },
+  { id: "tanimlar",   label: "Tanımlar",          icon: "tanimlar" }
 ];
 
 const ROUTES = {
@@ -73,9 +74,10 @@ function renderNav() {
     let out = "";
     if (n.sec && n.sec !== lastSec) { out += '<div class="sec">' + esc(n.sec) + "</div>"; lastSec = n.sec; }
     const c = n.badge ? badgeCount(n.badge) : 0;
-    out += '<button data-nav="' + n.id + '" class="' + (n.id === cur ? "on" : "") + '">' +
-      "<span>" + n.icon + "</span><span>" + esc(n.label) + "</span>" +
-      (c ? '<span class="nav-count">' + c + "</span>" : "") + "</button>";
+    out += '<button data-nav="' + n.id + '" class="' + (n.id === cur ? "on" : "") + '"' +
+      (n.id === cur ? ' aria-current="page"' : "") + ">" +
+      icon(n.icon) + "<span>" + esc(n.label) + "</span>" +
+      (c ? '<span class="nav-count" aria-label="' + c + ' kayıt">' + c + "</span>" : "") + "</button>";
     return out;
   }).join("") + '<div class="nav-version">Sürüm ' + esc(APP_VERSION) + "</div>";
 
@@ -85,12 +87,13 @@ function renderNav() {
   const bar = $("#tabbar");
   bar.innerHTML = tabs.map(function (n) {
     const c = n.badge ? badgeCount(n.badge) : 0;
-    return '<button data-nav="' + n.id + '" class="' + (n.id === cur ? "on" : "") + '">' +
-      '<span class="ic">' + n.icon + "</span><span>" + esc(n.label.split(" ")[0]) + "</span>" +
+    return '<button data-nav="' + n.id + '" class="' + (n.id === cur ? "on" : "") + '"' +
+      (n.id === cur ? ' aria-current="page"' : "") + ">" +
+      '<span class="ic">' + icon(n.icon, 24) + "</span><span>" + esc(n.label.split(" ")[0]) + "</span>" +
       (c ? '<span class="badge">' + c + "</span>" : "") + "</button>";
   }).join("") + (rest.length
     ? '<button id="more-btn" class="' + (rest.some(function (n) { return n.id === cur; }) ? "on" : "") + '">' +
-      '<span class="ic">☰</span><span>Daha</span>' +
+      '<span class="ic">' + icon("daha", 24) + "</span><span>Daha</span>" +
       (rest.some(function (n) { return n.badge && badgeCount(n.badge); })
         ? '<span class="badge">!</span>' : "") + "</button>"
     : "");
@@ -105,7 +108,7 @@ function renderNav() {
 function openMore(items) {
   const sheet = el('<div class="more-sheet"><div class="sheet">' + items.map(function (n) {
     const c = n.badge ? badgeCount(n.badge) : 0;
-    return '<button data-nav="' + n.id + '"><span>' + n.icon + "</span><span>" + esc(n.label) + "</span>" +
+    return '<button data-nav="' + n.id + '">' + icon(n.icon, 22) + "<span>" + esc(n.label) + "</span>" +
       (c ? '<span class="nav-count" style="margin-left:auto">' + c + "</span>" : "") + "</button>";
   }).join("") + "</div></div>");
   sheet.addEventListener("click", function (e) { if (e.target === sheet) sheet.remove(); });
@@ -116,8 +119,51 @@ function openMore(items) {
 }
 
 /* ---------------- çizim ---------------- */
+//
+// Ekran, veri her değiştiğinde yeniden çizilir. Canlı bir hatta bu sık olur:
+// başka bir tabletten gelen her kayıt bir çizim demek. Üç şeye dikkat edilir:
+//
+//  1) Art arda gelen değişiklikler TEK çizimde toplanır (requestRender). Açılışta
+//     on ayrı dinleyici arka arkaya veri getirir; her biri için ekranı baştan
+//     kurmak hem yavaş hem de traktör kartında olay geçmişini on kez okutur.
+//  2) Çizim sürerken gelen istek KAYBOLMAZ, çizim bitince bir kez daha çizilir.
+//     Eskiden düşüyordu: ekran, bir sonraki değişikliğe kadar eski veriyle kalırdı.
+//  3) Yazı yazılan alan korunur. Operatör şasi numarasını yazarken başka bir
+//     istasyondan kayıt gelirse alan sıfırlanıyor, imleç kayboluyordu.
 
 let drawing = false;
+let again = false;
+let queued = null;
+
+function requestRender() {
+  if (queued) return;
+  queued = setTimeout(function () { queued = null; render(); }, 60);
+}
+
+// Çizimden önce: yazı yazılan alanın kimliği, içeriği ve imleç yeri.
+function odagiAl(view) {
+  const a = document.activeElement;
+  if (!a || !a.id || !view.contains(a)) return null;
+  const yazi = a.tagName === "TEXTAREA" ||
+    (a.tagName === "INPUT" && ["checkbox", "radio", "button", "file"].indexOf(a.type) === -1);
+  const o = { id: a.id, yazi: yazi };
+  if (yazi) {
+    o.value = a.value;
+    try { o.s = a.selectionStart; o.e = a.selectionEnd; } catch (e) {}
+  }
+  return o;
+}
+
+function odagiVer(o) {
+  if (!o) return;
+  const n = document.getElementById(o.id);
+  if (!n || n === document.activeElement) return;
+  // Açık bir pencere varsa odak ondadır; arkadaki ekrana geri çekilmez.
+  if ($("#modal-host") && $("#modal-host").children.length) return;
+  if (o.yazi && typeof o.value === "string" && n.value !== o.value) n.value = o.value;
+  try { n.focus({ preventScroll: true }); } catch (e) { try { n.focus(); } catch (e2) {} }
+  if (o.yazi && o.s != null) { try { n.setSelectionRange(o.s, o.e); } catch (e) {} }
+}
 
 async function render() {
   if (session.state !== "ready") return;
@@ -126,6 +172,9 @@ async function render() {
   // Tanımlar hiç yüklenmemişse önce kurulum ekranı.
   if (!data.steps.length) {
     renderNav();
+    // Veri henüz gelmemiş olabilir: ilk yanıt gelene kadar "kurulmadı" demek
+    // yanlış alarm olur (yavaş bağlantıda her açılışta bir an görünüyordu).
+    if (!data.ready) { view.innerHTML = iskelet(); return; }
     if (isAdmin()) A.seedScreen(view, [], render);
     else view.innerHTML = '<div class="empty"><span class="ic">⏳</span>' +
       "Sistem henüz kurulmadı. Yöneticinin başlangıç verilerini yüklemesi gerekiyor.</div>";
@@ -145,14 +194,28 @@ async function render() {
   }
 
   renderNav();
-  if (drawing) return;
+  if (drawing) { again = true; return; }
   drawing = true;
+  const odak = odagiAl(view);
   try {
     await ROUTES[r.name](view, r.params, render);
+    odagiVer(odak);
   } catch (e) {
     console.error(e);
     view.innerHTML = '<div class="banner bad">Ekran çizilemedi: ' + esc((e && e.message) || "") + "</div>";
-  } finally { drawing = false; }
+  } finally {
+    drawing = false;
+    if (again) { again = false; requestRender(); }
+  }
+}
+
+// Veri gelene kadar gösterilen yer tutucu: boş beyaz ekran "bozuldu" diye,
+// gri bloklar "yükleniyor" diye okunur.
+function iskelet() {
+  return '<div class="skel" aria-busy="true" aria-label="Yükleniyor">' +
+    '<div class="skel-line w40"></div><div class="skel-row">' +
+    '<div class="skel-box"></div><div class="skel-box"></div><div class="skel-box"></div></div>' +
+    '<div class="skel-card"></div><div class="skel-card"></div></div>';
 }
 
 /* ---------------- giriş ekranı ---------------- */
@@ -304,8 +367,13 @@ async function onSession() {
     $("#login").hidden = true;
     $("#app").hidden = false;
     $("#user-name").textContent = myName();
-    $("#user-roles").textContent = roleLabels(
-      (session.member && session.member.roles) || []).join(" · ");
+    // Rollerin tamamı üst çubuğa sığmıyor ve kesiliyordu ("… Operatörü ...").
+    // İlki yazılır, kalanı sayıyla; tam liste üzerine gelince / basılı tutunca.
+    const roller = roleLabels((session.member && session.member.roles) || []);
+    const ru = $("#user-roles");
+    ru.textContent = roller.length > 1 ? roller[0] + " +" + (roller.length - 1) : (roller[0] || "");
+    ru.title = roller.join(" · ");
+    $(".topbar-user").title = myName() + " — " + roller.join(" · ");
     $("#topbar-sub").textContent = todayLabel();
     startClock();
 
@@ -313,7 +381,7 @@ async function onSession() {
       watching = true;
       await startWatching();
       if (isAdmin()) await watchRequests();
-      onData(function () { render(); });
+      onData(function () { requestRender(); });
     }
     render();
   } else {
@@ -349,16 +417,98 @@ document.addEventListener("visibilitychange", function () { if (!document.hidden
 
 /* ---------------- çevrimdışı göstergesi ---------------- */
 // Kayıtlar cihazda tutulur ve bağlantı gelince gönderilir; kişi bunu bilsin.
+// Kaç kaydın beklediği de yazılır: "gönderilecek" sözü, sayı görünmeden
+// güven vermiyor.
 function netBar() {
   let bar = $("#net-bar");
-  if (navigator.onLine) { if (bar) bar.remove(); return; }
-  if (bar) return;
-  bar = el('<div id="net-bar" class="net-bar">Bağlantı yok — yaptığınız kayıtlar cihazda tutuluyor, bağlantı gelince gönderilecek.</div>');
-  document.body.appendChild(bar);
+  if (navigator.onLine) {
+    if (bar) bar.remove();
+    document.body.classList.remove("is-offline");
+    document.documentElement.style.setProperty("--net-h", "0px");
+    return;
+  }
+  if (!bar) {
+    bar = el('<div id="net-bar" class="net-bar" role="status"></div>');
+    document.body.appendChild(bar);
+    document.body.classList.add("is-offline");
+  }
+  const t = "Bağlantı yok — yaptığınız kayıtlar cihazda tutuluyor, bağlantı gelince gönderilecek." +
+    (net.pending ? " (" + net.pending + " kayıt bekliyor)" : "");
+  if (bar.textContent !== t) bar.textContent = t;
+  document.documentElement.style.setProperty("--net-h", bar.offsetHeight + "px");
 }
 window.addEventListener("online", netBar);
 window.addEventListener("offline", netBar);
+setInterval(netBar, 5000);
 netBar();
+
+/* ---------------- çevrimdışı kabuk (servis çalışanı) ---------------- */
+// Ayrıntı sw.js içinde. Kayıt başarısız olursa uygulama eskisi gibi çalışır;
+// bu yüzden hata sessizce geçilir.
+if ("serviceWorker" in navigator &&
+    (location.protocol === "https:" || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  });
+}
+
+/* ---------------- yeni sürüm bildirimi ---------------- */
+// İstasyon tabletleri günlerce açık kalıyor; sayfa yenilenmedikçe eski sürümde
+// çalışmaya devam ediyorlar ve "güncelleme bu tablete ulaştı mı?" sorusunun
+// cevabı hep "birisi gidip yenilerse" oluyordu. Artık uygulama sunucudaki
+// sürüm damgasına kendisi bakar:
+//   - kişi çalışıyorsa üstte bir şerit çıkar, uygun olduğunda kendisi yeniler
+//     (yarım kalmış bir hata kaydı zorla silinmesin);
+//   - tablet boştaysa (pencere açık değil, birkaç dakikadır dokunulmamış)
+//     kendiliğinden yenilenir.
+const SURUM_ARALIGI = 10 * 60000;
+const SURUM_BOSTA = 3 * 60000;
+let yeniSurum = null;
+
+async function surumDenetle() {
+  if (!navigator.onLine) return;
+  try {
+    const r = await fetch("js/config.js?surum-denetimi=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return;
+    const m = /APP_VERSION\s*=\s*"([^"]+)"/.exec(await r.text());
+    if (m && m[1] !== APP_VERSION) { yeniSurum = m[1]; surumSeridi(); }
+  } catch (e) { /* ağ yok ya da dosya okunamadı — bir sonraki sefere */ }
+}
+
+function surumSeridi() {
+  if (!yeniSurum) return;
+  const bosta = Date.now() - lastActivity > SURUM_BOSTA;
+  const pencereAcik = $("#modal-host") && $("#modal-host").children.length;
+  if (bosta && !pencereAcik && !net.pending) { location.reload(); return; }
+  if ($("#upd-bar")) return;
+  const bar = el('<div id="upd-bar" class="upd-bar" role="status"><span>Yeni sürüm hazır (' + esc(yeniSurum) +
+    ').</span><button class="btn btn-sm" id="upd-go">' + icon("yenile", 18) + " Yenile</button></div>");
+  document.body.appendChild(bar);
+  $("#upd-go", bar).onclick = function () { location.reload(); };
+}
+setInterval(function () { if (yeniSurum) surumSeridi(); else surumDenetle(); }, SURUM_ARALIGI);
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden) { if (yeniSurum) surumSeridi(); else surumDenetle(); }
+});
+setTimeout(surumDenetle, 15000);
+
+/* ---------------- beklenmeyen hatalar ---------------- */
+// Yakalanmamış bir hata eskiden yalnızca tarayıcı konsoluna düşüyordu;
+// sahadaki kişi düğmeye bastığını ama hiçbir şey olmadığını görüyordu.
+// Artık ekranda kısa bir bildirim çıkar. Aynı ileti art arda yağmasın diye
+// seyreltilir; ağ kopukluğu gibi beklenen durumlar ayrıca gösterilmez.
+let sonHata = { m: "", t: 0 };
+function beklenmeyen(msg) {
+  const m = String(msg || "");
+  if (!m || /ResizeObserver|permission|insufficient|offline|network|Failed to fetch|Load failed/i.test(m)) return;
+  if (m === sonHata.m && Date.now() - sonHata.t < 10000) return;
+  sonHata = { m: m, t: Date.now() };
+  toast("Beklenmeyen bir hata oluştu. İşlem kaydedilmediyse tekrar deneyin. (" + m.slice(0, 120) + ")", "err");
+}
+window.addEventListener("error", function (e) { beklenmeyen(e && e.message); });
+window.addEventListener("unhandledrejection", function (e) {
+  beklenmeyen(e && e.reason && (e.reason.message || e.reason));
+});
 
 window.addEventListener("hashchange", function () { render(); });
 
@@ -376,3 +526,7 @@ setInterval(function () {
 if (typeof window !== "undefined") {
   window.__TT__ = { session: session, data: data, flow: flow, render: render, V: V, A: A };
 }
+
+// Üst çubuk ve giriş ekranındaki işaret.
+$$("[data-logo]").forEach(function (n) { n.innerHTML = logo(Number(n.dataset.logo) || 32); });
+$("#logout-btn").innerHTML = icon("cikis", 20) + '<span class="lbl">Çıkış</span>';

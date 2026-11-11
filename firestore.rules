@@ -23,8 +23,13 @@ service cloud.firestore {
     function email()   { return request.auth.token.email.lower(); }
     function userRef() { return /databases/$(database)/documents/allowed/$(email()); }
 
-    function isAllowed() { return signedIn() && exists(userRef()); }
     function me()        { return get(userRef()).data; }
+    // Yetki belgesinde "active" alanı hiç yoksa kişi etkin sayılır (ilk yönetici
+    // belgesi elle açılırken bu alan yazılmıyor); yalnızca AÇIKÇA false ise
+    // erişim kapanır. storage.rules ile aynı kural.
+    function isAllowed() {
+      return signedIn() && exists(userRef()) && me().get('active', true) != false;
+    }
     function myRoles()   { return me().get('roles', []); }
 
     // Sistem yöneticiliği her yetkiyi açar.
@@ -63,11 +68,12 @@ service cloud.firestore {
     }
 
     // --- tanımlar: adımlar, listeler, katalog, kişiler ------------------
-    // Katalog hata kaydı açılırken büyüdüğü için kontrol rolü de yazabilir;
+    // Katalog hata kaydı açılırken büyüdüğü için hata kaydı açabilen her rol
+    // yazabilir (üretim operatörü dahil — bkz. flow.addDefect);
     // adımlar ve listeler yalnızca yöneticide.
     match /config/catalog {
       allow read:  if isAllowed();
-      allow write: if hasRole(['kontrol', 'onay', 'hata_duzenle']);
+      allow write: if hasRole(['kontrol', 'onay', 'operator', 'hata_duzenle']);
     }
     match /config/{doc} {
       allow read:  if isAllowed();
@@ -82,7 +88,8 @@ service cloud.firestore {
     }
     match /tractors/{doc} {
       allow read:   if isAllowed();
-      allow create: if hasRole(['operator', 'kontrol', 'onay']);
+      // Uygulamadaki kuralla aynı (flow.createTractor): hat başındaki herkes.
+      allow create: if hasRole(['operator', 'kontrol', 'onay', 'rework']);
       allow update: if hasRole(['operator', 'kontrol', 'onay', 'rework'])
                     && (chassisUnchanged() || canEditDefects());
       // Traktör kaydı silinmez; sevk edilir ya da beklemeye alınır.
@@ -128,13 +135,21 @@ service cloud.firestore {
           || canEditDefects();
     }
 
+    // Üretim operatörü var olan bir kayda yalnızca FOTOĞRAF ekleyebilir;
+    // durumunu, rework ya da onay bilgisini değiştiremez.
+    function photosOnly() { return keysChanged().hasOnly(['photos']); }
+
     match /defects/{doc} {
       allow read:   if isAllowed();
-      allow create: if hasRole(['kontrol', 'onay'])
+      // Uygulamadaki kuralla aynı (flow.addDefect): üretim operatörü de kendi
+      // istasyonunda gördüğü hatayı kaydeder. Eskiden burada 'operator' yoktu;
+      // yalnızca operatör rolü olan kişinin kaydı sunucuda reddediliyordu.
+      allow create: if hasRole(['kontrol', 'onay', 'operator'])
                     && nd().get('detectedBy', '') == email()
                     && nd().get('status', '') == 'acik';
-      allow update: if hasRole(['kontrol', 'onay', 'rework'])
-                    && approvalOk() && approverIsMe() && cancelOk() && editOk();
+      allow update: if (hasRole(['kontrol', 'onay', 'rework'])
+                        && approvalOk() && approverIsMe() && cancelOk() && editOk())
+                    || (hasRole(['operator']) && photosOnly());
       // Hata kaydı SİLİNMEZ, iptal edilir — geçmiş izsiz kaybolmasın.
       allow delete: if false;
     }

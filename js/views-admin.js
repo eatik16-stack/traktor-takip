@@ -1,7 +1,7 @@
 // Yönetim raporu, erişim talepleri ve tanımlar.
 
-import { $, $$, esc, el, fmtDate, fmtMin, fmtNum, toast } from "./util.js";
-import { modal, confirmDialog, kpi, emptyBox, barChart, statusChip } from "./ui.js";
+import { $, $$, esc, el, fmtDate, fmtMin, fmtNum, toast, workMinutes } from "./util.js";
+import { modal, confirmDialog, kpi, emptyBox, barChart, trendChart, statusChip } from "./ui.js";
 import { data, activeSteps, stepByCode, saveDoc, setDocFull, removeDoc,
          grantAccess, revokeAccess, decideRequest, readLog, log,
          ensureHistory, RECENT_DAYS } from "./store.js";
@@ -99,6 +99,57 @@ function buildReport(days) {
   const inspectors = tally(defects, "detectedByName");
   const reworkers = tally(defects.filter(function (d) { return d.reworkByName; }), "reworkByName");
 
+  // Rework yapanın ortalama giderme süresi (çalışma dakikası). Yalnızca
+  // başlangıcı ve bitişi yazılmış kayıtlar sayılır.
+  const sureler = {};
+  defects.forEach(function (d) {
+    if (!d.reworkByName || !d.reworkStartedAt || !d.reworkFinishedAt) return;
+    const dk = workMinutes(d.reworkStartedAt, d.reworkFinishedAt);
+    if (!(dk >= 0)) return;
+    (sureler[d.reworkByName] = sureler[d.reworkByName] || []).push(dk);
+  });
+  reworkers.forEach(function (r) {
+    const a = sureler[r.label];
+    r.avgMinutes = a && a.length ? Math.round(avg(a)) : null;
+    r.timed = a ? a.length : 0;
+  });
+
+  // En sık tekrar eden hata tanımları: neyin üstüne gidilmeli.
+  const tanimlar = {};
+  defects.forEach(function (d) {
+    const k = String(d.description || "").trim();
+    if (!k) return;
+    const anahtar = k.toLocaleLowerCase("tr");
+    if (!tanimlar[anahtar]) tanimlar[anahtar] = { label: k, category: d.category || "", a: 0, open: 0 };
+    tanimlar[anahtar].a++;
+    if (flow.OPEN_STATES.indexOf(d.status) !== -1) tanimlar[anahtar].open++;
+  });
+  const topDefects = Object.keys(tanimlar).map(function (k) { return tanimlar[k]; })
+    .sort(function (x, y) { return y.a - x.a || x.label.localeCompare(y.label, "tr"); }).slice(0, 10);
+
+  // Günlük eğilim: o gün roll-down olan traktör ve o gün tespit edilen hata.
+  // 31 günden uzun dönemlerde haftalara toplanır (sütunlar okunabilsin).
+  const gunluk = days <= 31;
+  const kovaAnahtari = function (v) {
+    const t = new Date(v || 0);
+    if (isNaN(t.getTime())) return null;
+    t.setHours(0, 0, 0, 0);
+    if (!gunluk) t.setDate(t.getDate() - ((t.getDay() + 6) % 7));   // haftanın pazartesisi
+    return t.getTime();
+  };
+  const kovalar = {};
+  const baslangic = kovaAnahtari(d0);
+  for (let t = new Date(baslangic); t.getTime() <= d1.getTime(); t.setDate(t.getDate() + (gunluk ? 1 : 7))) {
+    kovalar[new Date(t).setHours(0, 0, 0, 0)] = { a: 0, b: 0 };
+  }
+  cohort.forEach(function (t) { const k = kovaAnahtari(t.rollDownAt); if (kovalar[k]) kovalar[k].a++; });
+  defects.forEach(function (d) { const k = kovaAnahtari(d.detectedAt); if (kovalar[k]) kovalar[k].b++; });
+  const iki = function (n) { return (n < 10 ? "0" : "") + n; };
+  const trend = Object.keys(kovalar).map(Number).sort(function (x, y) { return x - y; }).map(function (k) {
+    const t = new Date(k);
+    return { label: iki(t.getDate()) + "." + iki(t.getMonth() + 1), a: kovalar[k].a, b: kovalar[k].b };
+  });
+
   return {
     range: { start: d0, end: d1 },
     kpi: {
@@ -117,7 +168,10 @@ function buildReport(days) {
     byOrigin: tally(defects, "originLocation"),
     byStation: tally(defects, "detectedStepCode"),
     inspectors: inspectors,
-    reworkers: reworkers
+    reworkers: reworkers,
+    topDefects: topDefects,
+    trend: trend,
+    trendWeekly: !gunluk
   };
 }
 
@@ -161,29 +215,45 @@ export function rapor(view, _p, rerender) {
           "ilk seferde doğru (FTT)", k.ftt >= 70 ? "k-green" : "k-amber") +
     "</div>" +
 
+    (repDays > 1
+      ? '<div class="card"><div class="card-head"><h3>' + (d.trendWeekly ? "Haftalık" : "Günlük") + " Eğilim</h3></div>" +
+        '<p class="card-sub" style="margin-bottom:10px">' + (d.trendWeekly ? "Hafta başlangıcına göre" : "Güne göre") +
+          " roll-down olan traktör ve tespit edilen hata sayısı</p>" +
+        trendChart(d.trend, "Üretilen traktör", "Tespit edilen hata") + "</div>"
+      : "") +
+
     '<div class="card"><div class="card-head"><h3>İstasyon Süreleri</h3></div>' +
       '<p class="card-sub" style="margin-bottom:10px">Ortalama bekleme ve işlem süresi — hangi istasyonda ne kadar duruyor</p>' +
       barChart(d.stationTimes.map(function (s) {
-        return { label: s.code, a: s.wait, b: s.work };
+        return { label: s.code, a: s.wait, b: s.work, target: s.target || 0,
+                 note: s.samples ? s.samples + " traktör" : "veri yok" };
       }), "Bekleme", "İşlem", " dk") + "</div>" +
 
-    '<div class="card"><div class="card-head"><h3>Hata Kategorileri</h3></div>' +
-      barChart(d.byCategory.slice(0, 10), "Adet", null, "") + "</div>" +
-
-    '<div class="card"><div class="card-head"><h3>Hata Kaynağı</h3></div>' +
-      barChart(d.bySource.slice(0, 10), "Adet", null, "") + "</div>" +
-
-    '<div class="card"><div class="card-head"><h3>Oluşum Yeri</h3></div>' +
-      barChart(d.byOrigin.slice(0, 10), "Adet", null, "") + "</div>" +
-
-    '<div class="card"><div class="card-head"><h3>Hatayı Tespit Eden</h3></div>' +
-      barChart(d.inspectors.slice(0, 12), "Adet", null, "") + "</div>" +
-
-    '<div class="card"><div class="card-head"><h3>Rework Yapan</h3></div>' +
-      barChart(d.reworkers.slice(0, 12), "Adet", null, "") + "</div>" +
-
-    '<div class="card"><div class="card-head"><h3>Hangi İstasyonda Tespit Edildi</h3></div>' +
-      barChart(d.byStation.slice(0, 12), "Adet", null, "") + "</div>";
+    '<div class="grid-2">' +
+      '<div class="card"><div class="card-head"><h3>En Sık Tekrar Eden Hatalar</h3></div>' +
+        (d.topDefects.length
+          ? '<ol class="rank">' + d.topDefects.map(function (r) {
+              return "<li><span>" + esc(r.label) + "<small>" + esc(r.category) +
+                (r.open ? " · " + r.open + " açık" : "") + "</small></span><b>" + fmtNum(r.a) + "</b></li>";
+            }).join("") + "</ol>"
+          : emptyBox("Bu dönemde hata kaydı yok.", "✅")) + "</div>" +
+      '<div class="card"><div class="card-head"><h3>Hata Kategorileri</h3></div>' +
+        barChart(d.byCategory.slice(0, 10), "Adet", null, "") + "</div>" +
+      '<div class="card"><div class="card-head"><h3>Hata Kaynağı</h3></div>' +
+        barChart(d.bySource.slice(0, 10), "Adet", null, "") + "</div>" +
+      '<div class="card"><div class="card-head"><h3>Oluşum Yeri</h3></div>' +
+        barChart(d.byOrigin.slice(0, 10), "Adet", null, "") + "</div>" +
+      '<div class="card"><div class="card-head"><h3>Hangi İstasyonda Tespit Edildi</h3></div>' +
+        barChart(d.byStation.slice(0, 12), "Adet", null, "") + "</div>" +
+      '<div class="card"><div class="card-head"><h3>Hatayı Tespit Eden</h3></div>' +
+        barChart(d.inspectors.slice(0, 12), "Adet", null, "") + "</div>" +
+      '<div class="card"><div class="card-head"><h3>Rework Yapan</h3></div>' +
+        '<p class="card-sub" style="margin-bottom:10px">Giderilen hata adedi; altında ortalama giderme süresi</p>' +
+        barChart(d.reworkers.slice(0, 12).map(function (r) {
+          return { label: r.label, a: r.a,
+                   note: r.avgMinutes === null ? "" : "ort. " + fmtMin(r.avgMinutes) };
+        }), "Adet", null, "") + "</div>" +
+    "</div>";
 
   $("#r-days", view).onchange = function (e) { repDays = Number(e.target.value); rerender(); };
   $("#r-print", view).onclick = function () { window.print(); };
